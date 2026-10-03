@@ -656,6 +656,7 @@ route('POST', '/api/setup', null, async ({ req, res, ip }) => {
   const user = { id: crypto.randomUUID(), username: name, hash: hashPassword(password), role: 'admin', createdAt: Date.now(), lastLogin: Date.now() };
   db.users.push(user);
   setupCode = null;
+  fs.rmSync(path.join(DATA_DIR, 'codigo-configuracion.txt'), { force: true });
   activity(user, 'setup', 'Cuenta de administrador creada', ip);
   writeDbNow();
   log(`\x1b[32m✓\x1b[0m Hosting configurado. Administrador: ${user.username}`);
@@ -1455,7 +1456,15 @@ async function main() {
   purgeOld();
   setInterval(purgeOld, 3600 * 1000).unref();
 
-  if (!db.users.length) setupCode = newSetupCode();
+  // Mientras no haya cuentas, el código de configuración también se deja en data/ (solo accesible en este equipo).
+  const setupFile = path.join(DATA_DIR, 'codigo-configuracion.txt');
+  if (!db.users.length) {
+    setupCode = newSetupCode();
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(setupFile, `${setupCode}\n`);
+  } else {
+    fs.rmSync(setupFile, { force: true });
+  }
   writeDbNow();
 
   const shutdown = () => { try { writeDbNow(); } catch { /* nada */ } process.exit(0); };

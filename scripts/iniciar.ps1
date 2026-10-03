@@ -101,7 +101,19 @@ if (-not $SoloLocal) {
 $env:NOIR_PUBLIC_URL = $publicUrl
 if ($linked) { $env:NOIR_FIXED_URL = $fixedLink }
 try {
-  & node server.js
+  # Si el servidor se cae, se reinicia solo. Si falla 5 veces seguidas en menos de 15 s cada una, se rinde.
+  $quickFails = 0
+  do {
+    $started = Get-Date
+    & node server.js
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+      if (((Get-Date) - $started).TotalSeconds -lt 15) { $quickFails++ } else { $quickFails = 0 }
+      if ($quickFails -ge 5) { Say 'El servidor no logra arrancar. Revisa los mensajes de arriba.' 'Red'; Read-Host '  Pulsa Enter para salir' | Out-Null; break }
+      Say "El servidor se detuvo (codigo $code). Reiniciando en 3 segundos..." 'Yellow'
+      Start-Sleep -Seconds 3
+    }
+  } while ($code -ne 0)
 } finally {
   if ($tunnel -and -not $tunnel.HasExited) { Stop-Process -Id $tunnel.Id -Force -ErrorAction SilentlyContinue }
   if ($linked) { Publish-Link $publicUrl $false | Out-Null }

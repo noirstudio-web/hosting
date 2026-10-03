@@ -10,7 +10,9 @@ Servidor de archivos privado para acceder a este computador desde cualquier otro
    - Si lo haces desde **otro computador**, te pedirá el **código de configuración** que aparece en la ventana del servidor. Así nadie más puede adueñarse del hosting.
 4. A partir de ahí, entra con tu usuario y contraseña.
 
-> Deja la ventana abierta mientras uses el hosting. Al cerrarla, el acceso se corta.
+> Deja la ventana abierta mientras uses el hosting. Al cerrarla, el acceso se corta. Si el servidor falla, se reinicia solo.
+>
+> ¿Perdiste el código de configuración? Está en `data/codigo-configuracion.txt` hasta que se crea la primera cuenta.
 
 ## Qué incluye
 
@@ -37,6 +39,8 @@ Atajos: `/` buscar · `Supr` papelera · `F2` renombrar · `Ctrl+A` seleccionar 
 | `INICIAR.bat` | Arranca el servidor y el enlace por internet |
 | `INICIAR (solo red local).bat` | Solo para equipos conectados al mismo WiFi/router |
 | `RESTABLECER CONTRASENA.bat` | Si olvidas una contraseña: la cambia desde este equipo |
+| `ACTIVAR INICIO AUTOMATICO.bat` | El hosting arranca solo cada vez que inicias sesión en Windows (activado) |
+| `QUITAR INICIO AUTOMATICO.bat` | Desactiva el arranque automático |
 | `storage/` | Aquí se guardan tus archivos |
 | `databases/` | Bases de datos subidas y su historial de versiones |
 | `data/` | Usuarios, enlaces, códigos, papelera y actividad |
