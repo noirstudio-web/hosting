@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0b0c">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Noir Studio · Hosting</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <style>
+    :root { --bg: #0b0b0c; --line: #232327; --text: #ececee; --muted: #74747c; --gold: #d6b98c; --gold-2: #e8d2ad; --ok: #6fcf97; --danger: #ef6b6b; color-scheme: dark; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: grid; place-items: center; padding: 24px;
+      background: radial-gradient(1200px 600px at 50% -10%, #17150f 0%, var(--bg) 60%);
+      color: var(--text); font: 14px/1.5 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      width: 100%; max-width: 400px; padding: 40px 32px 32px; text-align: center;
+      background: rgba(20, 20, 22, .82); border: 1px solid var(--line); border-radius: 20px;
+      box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .8); animation: rise .5s cubic-bezier(.2, .8, .2, 1);
+    }
+    .mark {
+      display: grid; place-items: center; width: 56px; height: 56px; margin: 0 auto 22px; border-radius: 14px;
+      border: 1px solid rgba(214, 185, 140, .45); background: linear-gradient(160deg, #1b1914, #0d0d0e);
+      color: var(--gold); font-weight: 600; font-size: 24px;
+    }
+    h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+    p { margin: 8px 0 0; color: var(--muted); }
+    .status { display: inline-flex; align-items: center; gap: 10px; margin-top: 28px; color: var(--text); font-weight: 500; }
+    .spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--gold); border-radius: 50%; animation: spin .8s linear infinite; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 3px rgba(239, 107, 107, .15); }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 42px; margin-top: 24px;
+      border: 0; border-radius: 10px; background: var(--gold); color: #17130c; font: 500 14px inherit; font-family: inherit; cursor: pointer; text-decoration: none;
+    }
+    .btn:hover { background: var(--gold-2); }
+    .hint { margin-top: 18px; font-size: 12.5px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark" aria-hidden="true">N</div>
+    <h1>Noir Studio</h1>
+    <p>Servidor privado de archivos</p>
+
+    <div id="checking">
+      <div class="status"><span class="spinner"></span><span id="checkText">Conectando con el servidor…</span></div>
+    </div>
+
+    <div id="offline" hidden>
+      <div class="status"><span class="dot"></span>El servidor está apagado</div>
+      <p class="hint">Abre <strong>INICIAR.bat</strong> en el computador principal. Esta página se conectará sola en cuanto esté en línea.</p>
+      <button class="btn" id="retry" type="button">Reintentar ahora</button>
+    </div>
+  </main>
+
+  <script>
+    const REPO = 'noirstudio-web/hosting';
+    const $ = (id) => document.getElementById(id);
+
+    async function readLink() {
+      // La API de GitHub refleja el cambio al instante; url.json de Pages puede tardar unos minutos.
+      try {
+        const r = await fetch(`https://api.github.com/repos/${REPO}/contents/docs/url.json?ref=main&t=${Date.now()}`, {
+          headers: { Accept: 'application/vnd.github.raw+json' }, cache: 'no-store',
+        });
+        if (r.ok) return await r.json();
+      } catch {}
+      const r = await fetch(`url.json?t=${Date.now()}`, { cache: 'no-store' });
+      return r.json();
+    }
+
+    async function isOnline(url) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const r = await fetch(`${url}/api/session`, { cache: 'no-store', signal: ctrl.signal });
+        return r.ok && 'authenticated' in (await r.json());
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    let timer;
+    async function connect() {
+      clearTimeout(timer);
+      $('checking').hidden = false;
+      $('offline').hidden = true;
+      $('checkText').textContent = 'Conectando con el servidor…';
+      try {
+        const link = await readLink();
+        if (link && link.online && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(link.url) && await isOnline(link.url)) {
+          $('checkText').textContent = 'Servidor en línea · entrando…';
+          location.replace(link.url);
+          return;
+        }
+      } catch {}
+      $('checking').hidden = true;
+      $('offline').hidden = false;
+      timer = setTimeout(connect, 15000);
+    }
+
+    $('retry').addEventListener('click', connect);
+    connect();
+  </script>
+</body>
+</html>

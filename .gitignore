@@ -1,0 +1,8 @@
+# Datos privados y locales: nunca se suben al repositorio
+config.json
+storage/
+.uploads/
+bin/
+*.log
+data/
+databases/
