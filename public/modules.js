@@ -1,5 +1,5 @@
 'use strict';
-/* Noir Studio · Vistas de desarrollo y administración: código, bases de datos, códigos de acceso y dominio. */
+/* Noir Studio · Vistas de desarrollo y administración: código, bases de datos y códigos de acceso. */
 
 const publicBase = () => state.settings?.publicUrl || location.origin;
 const segHash = (...parts) => parts.flatMap((p) => String(p || '').split('/')).filter(Boolean).map(encodeURIComponent).join('/');
@@ -497,135 +497,9 @@ async function renderDbVersions(name, pane) {
   }
 }
 
-// ═════════════════════════ Dominio ═════════════════════════
-
-let domainPoll = null;
-
-function statusBadge(st) {
-  const map = { online: ['ok', 'En línea'], connecting: ['gold', 'Conectando…'], error: ['err', 'Error'], off: ['muted', 'Detenido'] };
-  const [cls, label] = map[st] || map.off;
-  return h('span', { class: `badge ${cls}`, text: label });
-}
-
-async function renderDomainView() {
-  clearInterval(domainPoll);
-  setHeader(heading('Dominio', 'Cómo se llega a tu hosting desde internet'), [], null);
-  setLoading(true);
-  try {
-    const s = await api('/api/domain');
-    if (state.view !== 'domain') return;
-
-    const conn = card('Direcciones de acceso', 'globe',
-      kv('Dominio propio', s.domain ? h('div', { class: 'url-value' }, statusBadge(s.tunnel.status), h('span', { class: 'mono', text: `https://${s.domain}` }), h('button', { class: 'icon-btn sm', type: 'button', title: 'Copiar', onclick: () => copyText(`https://${s.domain}`) }, icon('copy'))) : h('span', { class: 'muted', text: 'Sin configurar' })),
-      kv('Túnel temporal', s.quickUrl ? urlValue(s.quickUrl) : h('span', { class: 'muted', text: 'No activo' })),
-      kv('Enlace fijo (GitHub)', s.fixedUrl ? urlValue(s.fixedUrl) : h('span', { class: 'muted', text: 'No configurado' })),
-      kv('Este equipo', urlValue(s.localUrl)),
-      h('p', { class: 'panel-note', text: 'El túnel temporal cambia en cada reinicio. Con un dominio propio la dirección es siempre la misma y profesional, por ejemplo archivos.noirstudio.com.' }));
-
-    let main;
-    if (s.domain) {
-      const result = h('div', { class: 'verify' });
-      const verify = async () => {
-        result.replaceChildren(h('span', { class: 'spinner sm' }), ' Comprobando…');
-        try {
-          const v = await api('/api/domain/verify', { method: 'POST' });
-          const line = (ok, text) => h('div', { class: `verify-line ${ok ? 'ok' : 'bad'}` }, icon(ok ? 'check' : 'alert'), h('span', { text }));
-          result.replaceChildren(
-            line(v.dns, v.dns ? `DNS correcto (${v.addresses.slice(0, 2).join(', ')})` : 'El DNS aún no apunta a Cloudflare'),
-            line(v.reachable, v.reachable ? 'El dominio responde por HTTPS' : 'El dominio no responde todavía'),
-            line(v.sameServer, v.sameServer ? 'Llega a este servidor ✓' : 'No llega a este servidor'),
-            v.error && h('p', { class: 'panel-note', text: v.error }));
-        } catch (err) { result.replaceChildren(h('p', { class: 'form-error', text: err.message })); }
-      };
-      main = card('Tu dominio', 'shield',
-        h('div', { class: 'domain-hero' }, h('span', { class: 'mono domain-url', text: `https://${s.domain}` }), statusBadge(s.tunnel.status)),
-        s.tunnel.error && h('p', { class: 'form-error', text: s.tunnel.error }),
-        !s.credentials && h('p', { class: 'form-error', text: 'Falta la credencial del túnel en este equipo. Desconecta el dominio y vuelve a configurarlo.' }),
-        h('div', { class: 'panel-actions' },
-          h('button', { class: 'btn btn-primary', type: 'button', onclick: verify }, icon('check'), 'Verificar'),
-          s.tunnel.status === 'online' || s.tunnel.status === 'connecting'
-            ? h('button', { class: 'btn', type: 'button', onclick: async () => { await api('/api/domain/stop', { method: 'POST' }).catch(reportError); refresh(); } }, 'Detener túnel')
-            : h('button', { class: 'btn', type: 'button', onclick: async () => { try { await api('/api/domain/start', { method: 'POST' }); toast('Conectando…'); } catch (err) { reportError(err); } refresh(); } }, icon('play'), 'Iniciar túnel'),
-          h('a', { class: 'btn btn-ghost', href: `https://${s.domain}`, target: '_blank', rel: 'noopener' }, icon('external'), 'Abrir'),
-          h('button', {
-            class: 'btn btn-ghost btn-danger', type: 'button',
-            onclick: async () => {
-              if (!(await confirmDanger('¿Desconectar el dominio?', 'El hosting dejará de responder en tu dominio. El registro DNS en Cloudflare no se borra.', 'Desconectar'))) return;
-              try { await api('/api/domain', { method: 'DELETE' }); toast('Dominio desconectado'); refresh(); } catch (err) { reportError(err); }
-            },
-          }, 'Desconectar')),
-        result);
-      if (s.tunnel.status === 'connecting') domainPoll = setInterval(() => { if (state.view === 'domain') refresh(); else clearInterval(domainPoll); }, 4000);
-    } else {
-      const step = (n, done, title, desc, ...content) => h('li', { class: `wizard-step${done ? ' done' : ''}` },
-        h('span', { class: 'step-num' }, done ? icon('check') : String(n)),
-        h('div', { class: 'wizard-body' }, h('strong', { text: title }), h('p', { class: 'panel-note', text: desc }), ...content));
-
-      const authBtn = h('button', {
-        class: 'btn btn-primary', type: 'button', disabled: !s.cloudflared,
-        onclick: async () => {
-          authBtn.disabled = true;
-          try {
-            const r = await api('/api/domain/login', { method: 'POST' });
-            if (r.already) return refresh();
-            window.open(r.url, '_blank', 'noopener');
-            refresh();
-          } catch (err) { reportError(err); authBtn.disabled = false; }
-        },
-      }, icon('external'), 'Autorizar con Cloudflare');
-
-      const hostInput = h('input', { type: 'text', placeholder: 'archivos.tudominio.com', spellcheck: 'false', class: 'mono-input', disabled: !s.authorized });
-      const connectBtn = h('button', {
-        class: 'btn btn-primary', type: 'button', disabled: !s.authorized,
-        onclick: async () => {
-          connectBtn.disabled = true;
-          connectBtn.replaceChildren(h('span', { class: 'spinner sm' }), 'Creando túnel y DNS…');
-          try {
-            await api('/api/domain/setup', { method: 'POST', json: { hostname: hostInput.value } });
-            toast('Dominio conectado. Puede tardar 1–2 minutos en responder.');
-            refresh();
-          } catch (err) {
-            reportError(err);
-            connectBtn.disabled = false;
-            connectBtn.replaceChildren(icon('globe'), 'Conectar dominio');
-          }
-        },
-      }, icon('globe'), 'Conectar dominio');
-      hostInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectBtn.click(); });
-
-      main = card('Conectar tu propio dominio', 'shield',
-        h('p', { class: 'panel-note', text: 'Necesitas un dominio añadido a una cuenta gratuita de Cloudflare (puedes comprarlo en Cloudflare o cambiar los DNS de tu proveedor actual a Cloudflare).' }),
-        h('ol', { class: 'wizard' },
-          step(1, s.authorized, 'Autoriza este equipo en Cloudflare', s.authorized ? 'Autorizado.' : s.loginPending ? 'Se abrió Cloudflare en otra pestaña: elige tu dominio y pulsa “Authorize”. Esta página se actualiza sola.' : 'Se abrirá Cloudflare para que elijas el dominio que quieres usar.',
-            !s.authorized && (s.loginPending
-              ? h('div', { class: 'panel-actions' }, h('a', { class: 'btn', href: s.loginUrl, target: '_blank', rel: 'noopener' }, icon('external'), 'Abrir Cloudflare otra vez'), h('button', { class: 'btn btn-ghost', type: 'button', onclick: async () => { await api('/api/domain/login/cancel', { method: 'POST' }); refresh(); } }, 'Cancelar'))
-              : authBtn),
-            !s.cloudflared && h('p', { class: 'form-error', text: 'Falta cloudflared: inicia el hosting una vez con INICIAR.bat para descargarlo.' })),
-          step(2, false, 'Elige la dirección', 'Escribe el dominio o subdominio que abrirá tu hosting.', h('div', { class: 'copy-row' }, hostInput, connectBtn)),
-          step(3, false, 'Listo', 'El hosting quedará disponible en tu dominio con HTTPS, siempre con la misma dirección.')));
-      if (s.loginPending) domainPoll = setInterval(async () => {
-        if (state.view !== 'domain') return clearInterval(domainPoll);
-        const st = await api('/api/domain').catch(() => null);
-        if (st && (st.authorized || !st.loginPending)) { clearInterval(domainPoll); refresh(); }
-      }, 3000);
-    }
-
-    const manual = card('Configuración manual (avanzado)', 'code',
-      h('p', { class: 'panel-note', text: 'Si prefieres hacerlo desde la terminal, estos son los comandos equivalentes (carpeta bin del hosting):' }),
-      h('div', { class: 'file-card' }, codeBlock(`cloudflared tunnel login\ncloudflared tunnel create noir-studio\ncloudflared tunnel route dns noir-studio archivos.tudominio.com\ncloudflared tunnel run --url http://127.0.0.1:8420 noir-studio`, 'sh')));
-
-    setContent(h('div', { class: 'panels' }, h('div', { class: 'panels-col' }, main, manual), h('div', { class: 'panels-col' }, conn)));
-  } catch (err) {
-    reportError(err);
-  } finally {
-    setLoading(false);
-  }
-}
-
 // Registro de vistas
 Object.assign(VIEWS, {
   code: { render: renderCodeView, min: 'editor' },
   db: { render: renderDbView, min: 'editor' },
   invites: { render: renderInvitesView, min: 'admin' },
-  domain: { render: renderDomainView, min: 'admin' },
 });

@@ -629,10 +629,17 @@ function fileActions() {
   return [
     searchBox(),
     h('button', { class: 'btn', type: 'button', onclick: newFolder, title: 'Nueva carpeta' }, icon('folder-plus'), h('span', { text: 'Nueva carpeta' })),
-    h('div', { class: 'split' },
-      h('button', { class: 'btn btn-primary', type: 'button', onclick: () => $('#fileInput').click() }, icon('upload'), h('span', { text: 'Subir' })),
-      h('button', { class: 'btn btn-primary split-toggle', type: 'button', title: 'Subir una carpeta completa', 'aria-label': 'Subir carpeta', onclick: () => $('#folderInput').click() }, icon('folder'))),
+    h('button', { class: 'btn btn-primary', type: 'button', 'aria-haspopup': 'menu', onclick: (e) => uploadMenu(e.currentTarget) },
+      icon('upload'), h('span', { text: 'Subir' }), icon('chevron', 'caret-down')),
   ];
+}
+
+function uploadMenu(anchor) {
+  const r = anchor.getBoundingClientRect();
+  showMenu(r.right - 220, r.bottom + 6, [
+    { icon: 'file', label: 'Subir archivos', action: () => $('#fileInput').click() },
+    { icon: 'folder', label: 'Subir carpeta', action: () => $('#folderInput').click() },
+  ], r.top);
 }
 
 function crumbs() {
@@ -750,7 +757,9 @@ function renderFileList() {
     if (state.filter) return setContent(emptyState('search', 'Sin resultados', `Nada coincide con “${state.filter}” en esta carpeta.`));
     return setContent(emptyState(can('editor') ? 'upload' : 'folder', 'Esta carpeta está vacía',
       can('editor') ? 'Arrastra archivos o carpetas aquí, o usa el botón Subir.' : 'Todavía no hay archivos aquí.',
-      can('editor') && h('button', { class: 'btn btn-primary', type: 'button', onclick: () => $('#fileInput').click() }, icon('upload'), 'Subir archivos')));
+      can('editor') && h('div', { class: 'empty-actions' },
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => $('#fileInput').click() }, icon('file'), 'Subir archivos'),
+        h('button', { class: 'btn', type: 'button', onclick: () => $('#folderInput').click() }, icon('folder'), 'Subir carpeta'))));
   }
   setContent(state.layout === 'grid' ? renderGrid(items) : renderTable(items));
 }
@@ -1297,9 +1306,6 @@ const ACTIONS = {
   project_add: ['code', 'añadió el proyecto', 'users'],
   project_remove: ['code', 'quitó el proyecto', 'users'],
   project_zip: ['code', 'descargó el código de', 'files'],
-  domain_login: ['globe', 'inició la autorización de Cloudflare', 'users'],
-  domain_set: ['globe', 'conectó el dominio', 'users'],
-  domain_remove: ['globe', 'desconectó el dominio', 'users'],
 };
 
 let activityFilter = 'all';

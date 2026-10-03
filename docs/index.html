@@ -99,14 +99,10 @@
       $('checkText').textContent = 'Conectando con el servidor…';
       try {
         const link = await readLink();
-        // Primero el dominio propio; si aún no responde, la dirección temporal del túnel.
-        const candidates = [link?.domain, link?.online ? link.url : null].filter((u) => typeof u === 'string' && /^https:\/\/[a-z0-9.-]+$/i.test(u));
-        for (const url of candidates) {
-          if (await isOnline(url)) {
-            $('checkText').textContent = 'Servidor en línea · entrando…';
-            location.replace(url);
-            return;
-          }
+        if (link && link.online && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(link.url) && await isOnline(link.url)) {
+          $('checkText').textContent = 'Servidor en línea · entrando…';
+          location.replace(link.url);
+          return;
         }
       } catch {}
       $('checking').hidden = true;

@@ -264,7 +264,6 @@ const limiter = new Map(); // ip -> { count, first }
 const uploadLocks = new Set();
 let usageCache = { at: 0, value: null };
 let setupCode = null;
-const INSTANCE = crypto.randomBytes(8).toString('hex'); // identifica este proceso (verificación de dominio)
 
 function resolveIn(base, rel) {
   const clean = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -634,7 +633,6 @@ route('GET', '/api/session', null, ({ req, res, user }) => {
     setupRequired: db.users.length === 0,
     setupNeedsCode: db.users.length === 0 && !isLocalRequest(req),
     version: VERSION,
-    instance: INSTANCE,
   }, { 'Access-Control-Allow-Origin': '*' });
 });
 
@@ -1246,10 +1244,10 @@ route('DELETE', '/api/upload', 'editor', async ({ res, url }) => {
   sendJson(res, 200, { ok: true });
 });
 
-// ───────────────────────── Módulos: código, bases de datos y dominio ─────────────────────────
+// ───────────────────────── Módulos: código y bases de datos ─────────────────────────
 
 const ctx = {
-  ROOT, DATA_DIR, INSTANCE,
+  ROOT, DATA_DIR,
   DB_DIR: path.join(ROOT, 'databases'),
   BIN_DIR: path.join(ROOT, 'bin'),
   db, route, HttpError, sendJson, readJson, activity, saveDb, writeDbNow, log,
@@ -1265,10 +1263,8 @@ const ctx = {
 };
 require('./lib/projects')(ctx);
 require('./lib/databases')(ctx);
-require('./lib/domain')(ctx);
 
-// Dirección pública preferente: dominio propio si está en línea; si no, el túnel temporal.
-const publicBase = () => ctx.domainUrl() || process.env.NOIR_PUBLIC_URL || null;
+const publicBase = () => process.env.NOIR_PUBLIC_URL || null;
 
 // ───────────────────────── Estáticos ─────────────────────────
 
@@ -1350,9 +1346,6 @@ function banner() {
   }
   if (process.env.NOIR_FIXED_URL) {
     console.log(`  ${dim('Enlace fijo     ')} ${gold(bold(process.env.NOIR_FIXED_URL))}  ${dim('(siempre el mismo)')}`);
-  }
-  if (config.domain) {
-    console.log(`  ${dim('Dominio propio  ')} ${gold(bold(`https://${config.domain}`))}  ${dim('(conectando…)')}`);
   }
   console.log(`  ${dim('Usuarios        ')} ${db.users.length}`);
   console.log(`  ${line}`);
@@ -1476,10 +1469,7 @@ async function main() {
     else console.error(err);
     process.exit(1);
   });
-  server.listen(config.port, config.host, () => {
-    banner();
-    ctx.onListen?.();
-  });
+  server.listen(config.port, config.host, banner);
 }
 
 main();

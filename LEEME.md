@@ -18,7 +18,7 @@ Servidor de archivos privado para acceder a este computador desde cualquier otro
 
 | Sección | Qué puedes hacer |
 |---|---|
-| **Archivos** | Subir archivos y carpetas (botón o arrastrar), crear carpetas, renombrar, mover, copiar, descargar (carpetas como ZIP), vista previa de imágenes, video, audio, PDF y texto. Clic derecho para el menú de opciones. Arrastra archivos sobre una carpeta para moverlos. |
+| **Archivos** | Botón **Subir** → *Subir archivos* o *Subir carpeta* (o arrastrar), crear carpetas, renombrar, mover, copiar, descargar (carpetas como ZIP), vista previa de imágenes, video, audio, PDF y texto. Clic derecho para el menú de opciones. Arrastra archivos sobre una carpeta para moverlos. |
 | **Búsqueda** | Escribe en el buscador para filtrar la carpeta; pulsa **Enter** para buscar en todas las carpetas. |
 | **Compartidos** | Enlaces públicos de descarga para quien no tiene cuenta, con caducidad, contraseña y límite de descargas opcionales. |
 | **Papelera** | Lo eliminado va aquí y se puede restaurar. Se vacía sola tras 30 días (configurable). |
@@ -26,7 +26,6 @@ Servidor de archivos privado para acceder a este computador desde cualquier otro
 | **Bases de datos** | Sube bases SQLite (.db, .sqlite), volcados .sql, CSV o JSON. Explora tablas, ejecuta consultas SQL de solo lectura y conserva las 10 versiones anteriores con opción de restaurar. |
 | **Usuarios** *(admin)* | Crear cuentas con rol **Administrador**, **Editor** (sube, organiza, comparte) o **Lector** (solo ve y descarga). |
 | **Códigos de acceso** *(admin)* | Genera códigos de invitación (rol, caducidad y número de usos). La persona pulsa “¿Tienes un código de acceso?” en la pantalla de inicio, o abre el enlace de invitación, y crea su propia cuenta. |
-| **Dominio** *(admin)* | Estado de todas las direcciones de acceso y asistente para conectar tu propio dominio con Cloudflare (dirección fija con HTTPS). |
 | **Actividad** *(admin)* | Registro de accesos, intentos fallidos, subidas, descargas y cambios. |
 | **Ajustes** | Tu cuenta y contraseña, direcciones de conexión, uso del espacio por tipo de archivo, nombre del estudio, duración de la sesión. |
 
@@ -44,7 +43,7 @@ Atajos: `/` buscar · `Supr` papelera · `F2` renombrar · `Ctrl+A` seleccionar 
 | `storage/` | Aquí se guardan tus archivos |
 | `databases/` | Bases de datos subidas y su historial de versiones |
 | `data/` | Usuarios, enlaces, códigos, papelera y actividad |
-| `lib/` | Módulos del servidor (código, bases de datos, dominio) |
+| `lib/` | Módulos del servidor (código y bases de datos) |
 | `config.json` | Ajustes técnicos |
 
 ## Seguridad
@@ -58,6 +57,6 @@ Atajos: `/` buscar · `Supr` papelera · `F2` renombrar · `Ctrl+A` seleccionar 
 
 ## Notas
 
-- **La dirección del túnel temporal cambia cada vez que inicias el hosting.** Para una dirección fija, conecta tu dominio en la sección **Dominio** (requiere un dominio en una cuenta gratuita de Cloudflare).
+- **La dirección `trycloudflare.com` cambia cada vez que inicias el hosting.** Usa siempre el enlace fijo **https://noirstudio-web.github.io/hosting/**, que te lleva a la dirección actual.
 - Requiere [Node.js](https://nodejs.org) (ya instalado en este equipo).
 - Windows puede preguntar si permites el acceso a la red la primera vez: acepta en **redes privadas**.

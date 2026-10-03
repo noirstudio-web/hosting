@@ -26,8 +26,7 @@ $fixedLink = "https://$($owner.ToLower()).github.io/$repoName/"
 # Guarda la direccion actual del tunel en GitHub para que el enlace fijo redirija a ella
 function Publish-Link([string]$Url, [bool]$Online) {
   if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { Say 'GitHub CLI no instalado: el enlace fijo no se actualizara.' 'Yellow'; return $false }
-  $domainUrl = if ($cfg -and $cfg.domain) { "https://$($cfg.domain)" } else { $null }
-  $json = @{ url = $Url; online = $Online; domain = $domainUrl; updated = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json -Compress
+  $json = @{ url = $Url; online = $Online; updated = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json -Compress
   $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
   $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try {

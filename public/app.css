@@ -770,21 +770,6 @@ button.chip:hover { border-color: var(--gold); color: var(--gold-2); }
 .invite-code { padding: 18px; border: 1px dashed rgba(214, 185, 140, .5); border-radius: 14px; background: var(--gold-soft); text-align: center; font: 600 30px var(--mono); letter-spacing: .14em; color: var(--gold-2); }
 .invite-meta { text-align: center; color: var(--text-2); font-size: 13px; }
 
-/* Dominio */
-.wizard { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; }
-.wizard-step { display: flex; gap: 14px; }
-.wizard-step.done .step-num { background: rgba(111, 207, 151, .15); color: var(--ok); }
-.wizard-body { display: grid; gap: 8px; flex: 1; min-width: 0; }
-.wizard-body strong { font-size: 14px; }
-.domain-hero { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.domain-url { font-size: 16px; color: var(--gold-2); overflow-wrap: anywhere; }
-.verify { display: grid; gap: 8px; font-size: 13px; }
-.verify:empty { display: none; }
-.verify-line { display: flex; align-items: center; gap: 8px; }
-.verify-line .ic { width: 16px; height: 16px; }
-.verify-line.ok .ic { color: var(--ok); }
-.verify-line.bad .ic { color: var(--danger); }
-
 @media (max-width: 1100px) {
   .overview-cols { grid-template-columns: 1fr; }
   .code-layout { grid-template-columns: 230px 1fr; }
@@ -796,3 +781,7 @@ button.chip:hover { border-color: var(--gold); color: var(--gold-2); }
   .search-opt span { display: none; }
   .invite-code { font-size: 22px; }
 }
+
+/* Botón Subir con menú */
+.caret-down { width: 14px !important; height: 14px !important; transform: rotate(90deg); margin-left: -2px; opacity: .75; }
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
