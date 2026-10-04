@@ -14,7 +14,24 @@ Servidor de archivos privado para acceder a este computador desde cualquier otro
 >
 > ¿Perdiste el código de configuración? Está en `data/codigo-configuracion.txt` hasta que se crea la primera cuenta.
 
-## Guardar los archivos en otro PC
+## Servidor en otro PC (recomendado)
+
+El **otro PC** es el servidor, encendido siempre; **este PC** queda para desarrollar y publicar actualizaciones.
+
+**Instalar (una sola vez), en el otro PC:**
+1. Entra al panel → **Ajustes → Mudanza al PC servidor** y descarga los dos archivos:
+   **NoirStudioServidor.exe** y el **paquete de mudanza** (`noir-respaldo-….zip`, con tus usuarios, archivos y ajustes).
+2. Abre **NoirStudioServidor.exe** y acepta el permiso de administrador
+   (si sale *«Windows protegió su PC»*: **Más información → Ejecutar de todas formas**).
+3. Listo: importa tus datos, arranca **al encender el equipo aunque nadie inicie sesión**, evita la suspensión y el
+   enlace fijo **https://noirstudio-web.github.io/hosting/** pasa a llevar a él.
+
+**Publicar una actualización (desde este PC):** doble clic en **`PUBLICAR ACTUALIZACION.bat`**. Se sube a GitHub y el
+servidor se actualiza solo (o al momento desde *Ajustes → Servidor y actualizaciones*).
+
+Datos del servidor: `<disco>:\NoirStudio\` · registro: `data\logs\servidor.log`.
+
+## Guardar los archivos en otro PC (opcional)
 
 El panel se queda en este PC y **otro PC presta su disco** como almacenamiento del hosting:
 
@@ -50,6 +67,7 @@ Atajos: `/` buscar · `Supr` papelera · `F2` renombrar · `Ctrl+A` seleccionar 
 | `INICIAR.bat` | Arranca el servidor y el enlace por internet |
 | `INICIAR (solo red local).bat` | Solo para equipos conectados al mismo WiFi/router |
 | `RESTABLECER CONTRASENA.bat` | Si olvidas una contraseña: la cambia desde este equipo |
+| `PUBLICAR ACTUALIZACION.bat` | Publica una nueva versión: el PC servidor se actualiza solo |
 | `CONSTRUIR APP ALMACENAMIENTO.bat` | Vuelve a generar la app del PC de almacenamiento (se hace sola la primera vez) |
 | `ACTIVAR INICIO AUTOMATICO.bat` | El hosting arranca solo cada vez que inicias sesión en Windows (activado) |
 | `QUITAR INICIO AUTOMATICO.bat` | Desactiva el arranque automático |
@@ -58,6 +76,7 @@ Atajos: `/` buscar · `Supr` papelera · `F2` renombrar · `Ctrl+A` seleccionar 
 | `data/` | Usuarios, enlaces, códigos, papelera y actividad |
 | `lib/` | Módulos del servidor (almacenamiento, código y bases de datos) |
 | `agent/` | Código de la app NoirAlmacenamiento |
+| `app/` | Instalador y supervisor del servidor (NoirStudioServidor.exe) |
 | `config.json` | Ajustes técnicos |
 
 ## Seguridad

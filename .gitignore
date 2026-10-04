@@ -7,3 +7,4 @@ bin/
 data/
 databases/
 agent/dist/
+dist/

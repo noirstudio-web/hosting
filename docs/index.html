@@ -78,6 +78,30 @@
       return r.json();
     }
 
+    // Dirección publicada por el servidor y firmada con su clave: solo se aceptan mensajes con firma válida.
+    const b64url = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+    async function readRelay() {
+      try {
+        const cfg = await (await fetch(`relay.json?t=${Date.now()}`, { cache: 'no-store' })).json();
+        const key = await crypto.subtle.importKey('jwk', cfg.publicKey, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+        const text = await (await fetch(`https://ntfy.sh/${cfg.topic}/json?poll=1&since=24h`, { cache: 'no-store' })).text();
+        let best = null;
+        for (const line of text.split('\n')) {
+          try {
+            const ev = JSON.parse(line);
+            if (ev.event !== 'message') continue;
+            const m = JSON.parse(ev.message);
+            if (!/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(m.url) || Date.now() - m.ts > 48 * 3600 * 1000) continue;
+            const valid = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, b64url(m.sig), new TextEncoder().encode(`${m.url}\n${m.ts}`));
+            if (valid && (!best || m.ts > best.ts)) best = m;
+          } catch { /* mensaje no válido */ }
+        }
+        return best?.url || null;
+      } catch {
+        return null;
+      }
+    }
+
     async function isOnline(url) {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -98,11 +122,15 @@
       $('offline').hidden = true;
       $('checkText').textContent = 'Conectando con el servidor…';
       try {
-        const link = await readLink();
-        if (link && link.online && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(link.url) && await isOnline(link.url)) {
-          $('checkText').textContent = 'Servidor en línea · entrando…';
-          location.replace(link.url);
-          return;
+        // 1) Servidor principal (otro PC, dirección firmada)  2) hosting de desarrollo (url.json)
+        const [relayUrl, link] = await Promise.all([readRelay(), readLink().catch(() => null)]);
+        const candidates = [relayUrl, link?.online ? link.url : null].filter((u) => u && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(u));
+        for (const url of candidates) {
+          if (await isOnline(url)) {
+            $('checkText').textContent = 'Servidor en línea · entrando…';
+            location.replace(url);
+            return;
+          }
         }
       } catch {}
       $('checking').hidden = true;

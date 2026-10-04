@@ -1445,7 +1445,8 @@ async function renderSettingsView() {
       kv('Node.js', s.node),
       kv('En línea desde hace', fmtUptime(s.uptime)));
 
-    setContent(h('div', { class: 'panels' }, h('div', { class: 'panels-col' }, account, general, about), h('div', { class: 'panels-col' }, connection, storage)));
+    const serverInfo = can('admin') && typeof serverCard === 'function' ? await serverCard() : null;
+    setContent(h('div', { class: 'panels' }, h('div', { class: 'panels-col' }, account, general, serverInfo, about), h('div', { class: 'panels-col' }, connection, storage)));
   } catch (err) {
     reportError(err);
   } finally {

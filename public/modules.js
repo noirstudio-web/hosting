@@ -532,7 +532,7 @@ async function renderStorageView() {
     if (state.view !== 'storage') return;
     const downloadBtn = (cls = 'btn btn-primary') => (s.agentAvailable
       ? h('a', { class: cls, href: '/api/storage/agent-download', download: 'NoirAlmacenamiento.exe', onclick: () => toast('Descargando la app (≈ 90 MB)…') }, icon('download'), h('span', { text: 'Descargar app' }))
-      : h('span', { class: 'badge muted', text: 'Ejecuta CONSTRUIR APP ALMACENAMIENTO.bat en este PC' }));
+      : h('span', { class: 'badge muted', text: 'App de almacenamiento no disponible en este servidor' }));
     $('#actions').replaceChildren(downloadBtn());
 
     const cur = s.current;
@@ -606,6 +606,58 @@ async function renderStorageView() {
   } finally {
     setLoading(false);
   }
+}
+
+// ═════════════════════════ Servidor y actualizaciones (tarjeta de Ajustes) ═════════════════════════
+
+async function serverCard() {
+  let u;
+  try { u = await api('/api/update'); } catch { return null; }
+  if (!u.supervised) {
+    const exeUrl = `https://github.com/${u.repo}/releases/latest/download/NoirStudioServidor.exe`;
+    return card('Mudanza al PC servidor', 'server',
+      h('p', { class: 'panel-note', text: 'Para que otro PC sea el servidor (siempre encendido) y este quede solo para desarrollar y publicar actualizaciones:' }),
+      h('ol', { class: 'wizard' },
+        h('li', { class: 'wizard-step' }, h('span', { class: 'step-num', text: '1' }), h('div', { class: 'wizard-body' }, h('strong', { text: 'En el otro PC, descarga los dos archivos' }),
+          h('div', { class: 'panel-actions' },
+            h('a', { class: 'btn btn-primary', href: exeUrl }, icon('download'), 'Servidor (NoirStudioServidor.exe)'),
+            h('a', { class: 'btn', href: '/api/migrate/package', download: '' }, icon('archive'), 'Paquete de mudanza (tus datos)')))),
+        h('li', { class: 'wizard-step' }, h('span', { class: 'step-num', text: '2' }), h('div', { class: 'wizard-body' }, h('strong', { text: 'Abre NoirStudioServidor.exe' }), h('p', { class: 'panel-note', text: 'Acepta el permiso de administrador. Importa el paquete solo, queda arrancando al encender el equipo y el enlace fijo pasa a apuntar a él.' }))),
+        h('li', { class: 'wizard-step' }, h('span', { class: 'step-num', text: '3' }), h('div', { class: 'wizard-body' }, h('strong', { text: 'Desde este PC, publica actualizaciones' }), h('p', { class: 'panel-note', text: 'Doble clic en PUBLICAR ACTUALIZACION.bat: el servidor se actualiza solo.' })))));
+  }
+  const status = h('div', { class: 'verify' });
+  const autoBox = h('input', { type: 'checkbox', class: 'check', checked: u.autoUpdate });
+  autoBox.addEventListener('change', async () => {
+    try { await api('/api/update/auto', { method: 'POST', json: { enabled: autoBox.checked } }); toast(autoBox.checked ? 'Actualizaciones automáticas activadas' : 'Actualizaciones automáticas desactivadas'); } catch (err) { reportError(err); }
+  });
+  const show = (v) => {
+    status.replaceChildren(
+      kv('Versión instalada', v.current),
+      kv('Última publicada', v.latest ? `${v.latest.version}${v.latest.publishedAt ? ` · ${timeAgo(Date.parse(v.latest.publishedAt)).toLowerCase()}` : ''}` : (v.checkedAt ? 'Sin publicaciones' : '—')),
+      v.applying && h('p', { class: 'panel-note', text: `Actualizando… ${v.progress ?? 0}% (el servidor se reiniciará solo)` }),
+      v.error && h('p', { class: 'form-error', text: v.error }),
+      v.available && !v.applying && h('div', { class: 'panel-actions' }, h('button', {
+        class: 'btn btn-primary', type: 'button',
+        onclick: async () => {
+          try {
+            show(await api('/api/update/apply', { method: 'POST' }));
+            const from = v.current;
+            const poll = setInterval(async () => {
+              try {
+                const s = await fetch('/api/session').then((r) => r.json());
+                if (s.version !== from) { clearInterval(poll); toast(`Actualizado a la versión ${s.version}`); setTimeout(() => location.reload(), 800); }
+              } catch { /* reiniciando */ }
+              try { const nv = await api('/api/update'); if (nv.applying || nv.error) show(nv); } catch { /* reiniciando */ }
+            }, 2000);
+          } catch (err) { reportError(err); }
+        },
+      }, icon('download'), `Actualizar a la ${v.latest.version}`)));
+  };
+  show(u);
+  return card('Servidor y actualizaciones', 'server', status,
+    h('div', { class: 'panel-actions' },
+      h('button', { class: 'btn', type: 'button', onclick: async () => { try { show(await api('/api/update/check', { method: 'POST' })); } catch (err) { reportError(err); } } }, icon('refresh'), 'Buscar actualizaciones'),
+      h('label', { class: 'search-opt' }, autoBox, h('span', { text: 'Actualizar automáticamente' }))));
 }
 
 // Registro de vistas

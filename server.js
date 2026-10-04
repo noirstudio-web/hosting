@@ -11,8 +11,12 @@ const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
 
-const VERSION = '2.2.0';
-const ROOT = __dirname;
+let sea = null;
+try { sea = require('node:sea'); } catch { /* Node sin soporte SEA */ }
+const IS_SEA = Boolean(sea?.isSea?.()); // empaquetado como NoirStudioServidor.exe
+const VERSION = require('./lib/version');
+// En el servidor instalado, los datos viven en NOIR_HOME (p. ej. D:\NoirStudio).
+const ROOT = process.env.NOIR_HOME ? path.resolve(process.env.NOIR_HOME) : __dirname;
 const CONFIG_PATH = path.join(ROOT, 'config.json');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
@@ -1170,7 +1174,7 @@ route('DELETE', '/api/upload', 'editor', async ({ res, url }) => {
 // ───────────────────────── Módulos: código y bases de datos ─────────────────────────
 
 const ctx = {
-  ROOT, DATA_DIR, STORAGE,
+  ROOT, DATA_DIR, STORAGE, IS_SEA, VERSION, CONFIG_PATH,
   publicBase: () => publicBase(),
   lanUrls: () => lanAddresses().map((ip) => `http://${ip}:${config.port}`),
   invalidateUsage: () => invalidateUsage(),
@@ -1190,8 +1194,19 @@ const ctx = {
 require('./lib/storage')(ctx);
 require('./lib/projects')(ctx);
 require('./lib/databases')(ctx);
+require('./lib/updates')(ctx);
+require('./lib/migrate')(ctx);
 
 const publicBase = () => process.env.NOIR_PUBLIC_URL || null;
+
+// Mensajes del supervisor (servidor instalado): dirección pública actual del túnel.
+process.on('message', (msg) => {
+  if (msg?.type === 'public-url') process.env.NOIR_PUBLIC_URL = msg.url || '';
+  if (msg?.type === 'shutdown') {
+    try { writeDbNow(); } catch { /* nada */ }
+    process.exit(0);
+  }
+});
 
 // ───────────────────────── Estáticos ─────────────────────────
 
@@ -1214,11 +1229,16 @@ async function serveStatic(req, res, pathname) {
   try { rel = decodeURIComponent(pathname); } catch { throw new HttpError(400, 'Ruta inválida'); }
   if (rel === '/' || rel === '') rel = '/index.html';
   if (/^\/s\/[\w-]+\/?$/.test(rel)) rel = '/share.html';
-  const full = path.resolve(PUBLIC_DIR, '.' + rel);
-  if (!full.startsWith(PUBLIC_DIR + path.sep)) throw new HttpError(404, 'No encontrado');
+  rel = path.posix.normalize(rel);
+  if (!rel.startsWith('/') || rel.includes('..') || rel.includes('\0')) throw new HttpError(404, 'No encontrado');
   let data;
-  try { data = await fsp.readFile(full); } catch { throw new HttpError(404, 'No encontrado'); }
-  const ext = path.extname(full);
+  try {
+    // En el .exe, la web va incrustada como recursos; en desarrollo se lee de public/.
+    data = IS_SEA ? Buffer.from(sea.getAsset(`public${rel}`)) : await fsp.readFile(path.join(PUBLIC_DIR, rel));
+  } catch {
+    throw new HttpError(404, 'No encontrado');
+  }
+  const ext = path.extname(rel);
   res.writeHead(200, {
     'Content-Type': STATIC_MIME[ext] || 'application/octet-stream',
     'Content-Length': data.length,
