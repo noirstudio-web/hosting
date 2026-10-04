@@ -1110,28 +1110,32 @@ route('POST', '/api/settings', 'admin', async ({ req, res, user, ip }) => {
 
 // ── Subidas por fragmentos (reanudables)
 
-// Zona de destino de una subida: archivos del hosting o bases de datos (siempre en este PC).
-function uploadTarget(url) {
-  const area = url.searchParams.get('area') === 'db' ? 'db' : 'files';
+// Zona de destino de una subida: archivos del hosting, bases de datos o un proyecto de Código.
+function uploadTarget(url, user) {
+  const area = ['db', 'project'].includes(url.searchParams.get('area')) ? url.searchParams.get('area') : 'files';
   const dirRel = area === 'db' ? '' : checkRel(url.searchParams.get('path'));
   const name = validName(url.searchParams.get('name'));
   const size = Number(url.searchParams.get('size'));
   if (!name || (area === 'db' && name.startsWith('.'))) throw new HttpError(400, 'Nombre de archivo no válido');
   if (!Number.isSafeInteger(size) || size < 0) throw new HttpError(400, 'Tamaño no válido');
-  const s = area === 'db' ? ctx.localStore : store();
+  if (area === 'project') {
+    if (user.role !== 'admin') throw new HttpError(403, 'Solo un administrador puede subir proyectos');
+    if (ctx.projectRejects(joinRel(dirRel, name))) throw new HttpError(400, 'Archivo omitido: dependencias o claves no se suben');
+  }
+  const s = area === 'db' ? ctx.localStore : area === 'project' ? ctx.projectStore(url.searchParams.get('project')) : store();
   const id = crypto.createHash('sha256').update(`${area}\0${s.key}\0${dirRel}\0${name}\0${size}`).digest('hex').slice(0, 40);
   return { area, dirRel, name, size, id, s };
 }
 
-route('GET', '/api/upload/status', 'editor', async ({ res, url }) => {
-  const t = uploadTarget(url);
-  if (t.area === 'files') await t.s.mkdir(t.dirRel);
+route('GET', '/api/upload/status', 'editor', async ({ res, url, user }) => {
+  const t = uploadTarget(url, user);
+  if (t.area !== 'db') await t.s.mkdir(t.dirRel);
   const offset = uploadLocks.has(t.id) ? await t.s.partSize(t.id) : await t.s.resetPart(t.id, t.size);
   sendJson(res, 200, { offset });
 });
 
 route('PUT', '/api/upload', 'editor', async ({ req, res, url, user, ip }) => {
-  const t = uploadTarget(url);
+  const t = uploadTarget(url, user);
   const offset = Number(url.searchParams.get('offset'));
   const maxChunk = config.maxChunkMB * 1024 * 1024;
   if (Number(req.headers['content-length']) > maxChunk) throw new HttpError(413, 'Fragmento demasiado grande');
@@ -1155,6 +1159,7 @@ route('PUT', '/api/upload', 'editor', async ({ req, res, url, user, ip }) => {
       return sendJson(res, 200, { offset: now, done: true, name: t.name });
     }
     const finalName = await t.s.finishPart(t.id, t.dirRel, t.name);
+    if (t.area === 'project') return sendJson(res, 200, { offset: now, done: true, name: finalName });
     const rel = joinRel(t.dirRel, finalName);
     invalidateUsage();
     activity(user, 'upload', `${rel} (${fmtBytes(t.size)})`, ip);
@@ -1165,8 +1170,8 @@ route('PUT', '/api/upload', 'editor', async ({ req, res, url, user, ip }) => {
   }
 });
 
-route('DELETE', '/api/upload', 'editor', async ({ res, url }) => {
-  const t = uploadTarget(url);
+route('DELETE', '/api/upload', 'editor', async ({ res, url, user }) => {
+  const t = uploadTarget(url, user);
   if (!uploadLocks.has(t.id)) await t.s.cancelPart(t.id);
   sendJson(res, 200, { ok: true });
 });

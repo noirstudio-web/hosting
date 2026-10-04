@@ -1314,6 +1314,9 @@ const ACTIONS = {
   project_add: ['code', 'añadió el proyecto', 'users'],
   project_remove: ['code', 'quitó el proyecto', 'users'],
   project_zip: ['code', 'descargó el código de', 'files'],
+  project_upload: ['upload', 'subió el proyecto', 'files'],
+  migrate_package: ['archive', 'descargó el paquete de mudanza:', 'users'],
+  update: ['refresh', 'actualizó el servidor:', 'users'],
   storage_mode: ['server', 'cambió el almacenamiento a', 'users'],
   storage_migrate: ['copy', 'copió los archivos:', 'users'],
   agent_download: ['download', 'descargó la app de almacenamiento', 'users'],
@@ -1523,20 +1526,24 @@ $('#previewNext').addEventListener('click', () => stepPreview(1));
 
 const uploads = { tasks: [], active: 0, refreshTimer: null };
 
-function enqueue(entries, { area = 'files' } = {}) {
-  if (!entries.length) return;
-  if (!can('editor')) return toast('Tu cuenta solo permite ver y descargar', 'error');
+function enqueue(entries, { area = 'files', project = null } = {}) {
+  if (!entries.length) return [];
+  if (!can('editor')) { toast('Tu cuenta solo permite ver y descargar', 'error'); return []; }
   const base = state.view === 'files' ? state.path : '';
+  const created = [];
   for (const { file, rel, name } of entries) {
-    const t = { file, area, name: name || file.name, dir: area === 'db' ? '' : joinPath(base, rel), size: file.size, loaded: 0, status: 'queued', xhr: null, cancelled: false };
+    const dir = area === 'db' ? '' : area === 'project' ? rel : joinPath(base, rel);
+    const t = { file, area, project, name: name || file.name, dir, size: file.size, loaded: 0, status: 'queued', xhr: null, cancelled: false };
     t.el = buildUploadItem(t);
     $('#uploadsList').append(t.el);
     uploads.tasks.push(t);
+    created.push(t);
   }
   $('#uploads').hidden = false;
   $('#uploads').classList.remove('collapsed');
   updateUploadsHeader();
   pump();
+  return created;
 }
 
 function pump() {
@@ -1562,7 +1569,7 @@ function scheduleRefresh() {
 }
 
 async function runUpload(t) {
-  const qs = new URLSearchParams({ path: t.dir, name: t.name, size: String(t.size), area: t.area });
+  const qs = new URLSearchParams({ path: t.dir, name: t.name, size: String(t.size), area: t.area, ...(t.project && { project: t.project }) });
   t.status = 'uploading';
   t.started = performance.now();
   updateUploadItem(t);
@@ -1726,13 +1733,14 @@ $('#folderInput').addEventListener('change', (e) => {
 // Arrastrar y soltar archivos desde el equipo (incluye carpetas)
 let dragDepth = 0;
 const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
-const canDrop = () => state.me && can('editor') && (state.view === 'files' || (state.view === 'db' && !state.sub));
+const canDrop = () => state.me && can('editor') && (state.view === 'files' || (state.view === 'db' && !state.sub) || (state.view === 'code' && !state.sub && can('admin')));
 
 window.addEventListener('dragenter', (e) => {
   if (!hasFiles(e) || !canDrop()) return;
   e.preventDefault();
   dragDepth++;
   if (state.view === 'db') $('#dropTarget').textContent = 'en Bases de datos';
+  if (state.view === 'code') $('#dropTarget').textContent = 'como nuevo proyecto de Código';
   $('#dropzone').hidden = false;
 });
 window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
@@ -1750,7 +1758,9 @@ window.addEventListener('drop', async (e) => {
   const entries = [...e.dataTransfer.items].filter((i) => i.kind === 'file').map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
   const fallback = [...e.dataTransfer.files];
   try {
-    enqueue(entries.length ? await collectEntries(entries) : fallback.map((file) => ({ file, rel: '' })));
+    const collected = entries.length ? await collectEntries(entries) : fallback.map((file) => ({ file, rel: '' }));
+    if (state.view === 'code') return codeDrop(collected);
+    enqueue(collected);
   } catch (err) { reportError(err); }
 });
 

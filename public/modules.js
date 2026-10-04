@@ -119,6 +119,75 @@ async function renderInvitesView() {
 
 const codeCache = {}; // id -> { children: Map(path -> items), expanded: Set }
 
+// Al subir un proyecto no se envían dependencias, cachés ni archivos de claves.
+const PROJECT_SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', '.next', '.nuxt', '.cache', '.idea', '.vs', '.gradle', '.parcel-cache', '.turbo']);
+const PROJECT_SECRET = /^(\.env(\..+)?|.+\.(pem|key|pfx|p12|keystore|jks)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.npmrc|\.pypirc|credentials(\.json)?)$/i;
+
+// entries: [{ file, rel }] donde rel es la carpeta del archivo incluyendo la carpeta raíz elegida.
+function prepareProjectFiles(entries) {
+  const top = (entries.find((e) => e.rel)?.rel || '').split('/')[0];
+  const list = [];
+  let skipped = 0;
+  for (const { file, rel } of entries) {
+    const inner = top && (rel === top || rel.startsWith(`${top}/`)) ? rel.slice(top.length + 1) : rel;
+    const parts = [...inner.split('/').filter(Boolean), file.name];
+    if (parts.some((p) => PROJECT_SKIP_DIRS.has(p)) || PROJECT_SECRET.test(file.name)) { skipped++; continue; }
+    list.push({ file, rel: inner });
+  }
+  return { top, list, skipped };
+}
+
+function pickFolder() {
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'file', webkitdirectory: true, multiple: true, hidden: true });
+    input.addEventListener('change', () => {
+      resolve([...input.files].map((file) => ({ file, rel: (file.webkitRelativePath || file.name).split('/').slice(0, -1).join('/') })));
+      input.remove();
+    });
+    document.body.append(input);
+    input.click();
+  });
+}
+
+async function uploadProjectFolder(entries, existing = null) {
+  if (!entries?.length) return;
+  const { top, list, skipped } = prepareProjectFiles(entries);
+  if (!list.length) return toast('La carpeta no tiene archivos para subir (solo dependencias o claves)', 'error');
+  const size = list.reduce((s, e) => s + e.file.size, 0);
+  const summary = `${plural(list.length, 'archivo', 'archivos')} · ${fmtSize(size)}${skipped ? ` · ${skipped} omitidos (dependencias, .git o claves)` : ''}`;
+  let project = existing;
+  if (existing) {
+    if (!(await openDialog({ title: `¿Actualizar «${existing.name}»?`, message: `Se reemplazarán sus archivos por los de la carpeta elegida (${summary}).`, confirm: 'Actualizar' }))) return;
+    await api(`/api/projects/${existing.id}/clear`, { method: 'POST' });
+  } else {
+    const name = h('input', { type: 'text', required: true, maxlength: '60', value: top || 'Proyecto' });
+    project = await openDialog({
+      title: 'Subir proyecto', message: summary,
+      body: field('Nombre del proyecto', name), confirm: 'Subir',
+      onConfirm: async () => (await api('/api/projects/upload', { method: 'POST', json: { name: name.value.trim() } })).project,
+    });
+    if (!project) return;
+  }
+  delete codeCache[project.id];
+  const tasks = enqueue(list, { area: 'project', project: project.id });
+  toast(`Subiendo ${plural(list.length, 'archivo', 'archivos')} de «${project.name}»…`);
+  const wait = setInterval(async () => {
+    if (tasks.some((t) => t.status === 'queued' || t.status === 'uploading')) return;
+    clearInterval(wait);
+    const done = tasks.filter((t) => t.status === 'done').length;
+    try { await api(`/api/projects/${project.id}/uploaded`, { method: 'POST', json: { files: done, skipped } }); } catch { /* no crítico */ }
+    delete codeCache[project.id];
+    toast(done === tasks.length ? `Proyecto «${project.name}» listo` : `«${project.name}»: ${done} de ${tasks.length} archivos subidos`, done === tasks.length ? 'ok' : 'error');
+    if (location.hash === `#/code/${project.id}`) refresh(); else location.hash = `#/code/${project.id}`;
+  }, 1000);
+}
+
+// Soltar una carpeta en la lista de proyectos (lo llama app.js).
+function codeDrop(entries) {
+  if (!can('admin')) return toast('Solo un administrador puede subir proyectos', 'error');
+  uploadProjectFolder(entries);
+}
+
 function projectDialog() {
   const name = h('input', { type: 'text', required: true, maxlength: '60', placeholder: 'Mi app' });
   const dir = h('input', { type: 'text', required: true, spellcheck: 'false', placeholder: 'C:\\Users\\Usuario\\Desktop\\mi-app', class: 'mono-input' });
@@ -142,20 +211,26 @@ async function renderCodeView() {
   return renderProject(id, rest.join('/'));
 }
 
+const uploadProjectBtn = (cls = 'btn btn-primary') => h('button', { class: cls, type: 'button', onclick: async () => uploadProjectFolder(await pickFolder()) }, icon('upload'), h('span', { text: 'Subir carpeta' }));
+const pathProjectBtn = () => h('button', { class: 'btn', type: 'button', onclick: projectDialog, title: 'Mostrar una carpeta que ya está en el PC servidor' }, icon('folder'), h('span', { text: 'Carpeta del servidor' }));
+
 async function renderProjectList() {
-  setHeader(heading('Código', 'Proyectos de desarrollo de este equipo'), [
-    can('admin') && h('button', { class: 'btn btn-primary', type: 'button', onclick: projectDialog }, icon('plus'), h('span', { text: 'Añadir proyecto' })),
-  ], null);
+  setHeader(heading('Código', 'Tus proyectos de desarrollo'), can('admin') ? [pathProjectBtn(), uploadProjectBtn()] : [], null);
   setLoading(true);
   try {
     const { items } = await api('/api/projects');
     if (state.view !== 'code') return;
-    if (!items.length) return setContent(emptyState('code', 'No hay proyectos', 'Añade la carpeta de un proyecto para ver su código desde cualquier lugar.', can('admin') && h('button', { class: 'btn btn-primary', type: 'button', onclick: projectDialog }, icon('plus'), 'Añadir proyecto')));
+    if (!items.length) {
+      return setContent(emptyState('code', 'No hay proyectos', can('admin') ? 'Sube la carpeta de un proyecto (o arrástrala aquí) para ver su código desde cualquier lugar. No se suben node_modules, .git ni archivos de claves.' : 'Un administrador puede subir proyectos.',
+        can('admin') && h('div', { class: 'empty-actions' }, uploadProjectBtn(), pathProjectBtn())));
+    }
     setContent(h('div', { class: 'project-grid' }, items.map((p) => h('a', { class: `project-card${p.exists ? '' : ' missing'}`, href: `#/code/${p.id}` },
-      h('div', { class: 'project-top' }, h('span', { class: 'ftype code' }, icon('code')), p.branch && h('span', { class: 'badge' }, icon('branch'), p.branch)),
+      h('div', { class: 'project-top' }, h('span', { class: 'ftype code' }, icon('code')),
+        p.kind === 'upload' ? h('span', { class: 'badge', title: 'Subido al hosting' }, icon('upload'), 'Subido') : p.branch && h('span', { class: 'badge' }, icon('branch'), p.branch)),
       h('strong', { text: p.name }),
-      h('span', { class: 'project-path', text: p.path, title: p.path }),
-      !p.exists && h('span', { class: 'badge muted', text: 'Carpeta no encontrada' })))));
+      h('span', { class: 'project-path', text: p.kind === 'upload' ? `Actualizado ${timeAgo(p.updatedAt || p.createdAt).toLowerCase()}` : p.path, title: p.path || '' }),
+      !p.exists && h('span', { class: 'badge muted', text: p.kind === 'upload' ? 'Sin archivos' : 'Carpeta no encontrada' })))),
+      can('admin') && h('p', { class: 'panel-note drop-hint', text: 'Consejo: arrastra una carpeta a esta página para subirla como proyecto.' }));
   } catch (err) {
     reportError(err);
   } finally {
@@ -195,11 +270,13 @@ async function renderProject(id, filePath) {
       ...parts.flatMap((s, i) => [icon('chevron', 'crumb-sep'), h('a', { class: `crumb${i === parts.length - 1 ? ' current' : ''}`, href: `#/code/${id}/${segHash(parts.slice(0, i + 1).join('/'))}`, text: s })]));
     setHeader(crumbs, [
       h('label', { class: 'search' }, icon('search'), searchInput, h('label', { class: 'search-opt', title: 'Buscar también dentro de los archivos' }, inContent, h('span', { text: 'contenido' }))),
+      can('admin') && p.kind === 'upload' && h('button', { class: 'btn', type: 'button', title: 'Vuelve a subir la carpeta para reemplazar los archivos', onclick: async () => uploadProjectFolder(await pickFolder(), p) }, icon('refresh'), h('span', { text: 'Actualizar carpeta' })),
       h('a', { class: 'btn', href: `/api/projects/${id}/zip`, download: '', title: 'Descargar el proyecto en ZIP' }, icon('download'), h('span', { text: 'ZIP' })),
       can('admin') && h('button', {
-        class: 'icon-btn', type: 'button', title: 'Quitar proyecto de la lista',
+        class: 'icon-btn', type: 'button', title: p.kind === 'upload' ? 'Eliminar proyecto' : 'Quitar proyecto de la lista',
         onclick: async () => {
-          if (!(await confirmDanger(`¿Quitar “${p.name}”?`, 'Solo se quita de la lista. La carpeta y sus archivos no se tocan.', 'Quitar'))) return;
+          const msg = p.kind === 'upload' ? 'Se borrarán sus archivos del hosting. Tu carpeta original no se toca.' : 'Solo se quita de la lista. La carpeta y sus archivos no se tocan.';
+          if (!(await confirmDanger(`¿${p.kind === 'upload' ? 'Eliminar' : 'Quitar'} “${p.name}”?`, msg, p.kind === 'upload' ? 'Eliminar' : 'Quitar'))) return;
           try { await api(`/api/projects/${id}`, { method: 'DELETE' }); delete codeCache[id]; toast('Proyecto quitado'); location.hash = '#/code'; } catch (err) { reportError(err); }
         },
       }, icon('trash')),
@@ -270,7 +347,7 @@ function showOverview(info, viewer, id) {
       card('Últimos cambios (Git)', 'branch', git?.commits?.length
         ? h('ul', { class: 'commits' }, git.commits.map((cm) => h('li', {}, h('span', { class: 'mono commit-hash', text: cm.hash }), h('div', { class: 'name-stack' }, h('span', { text: cm.subject }), h('small', { text: `${cm.author} · ${timeAgo(cm.at)}` })))))
         : h('p', { class: 'panel-note', text: git ? 'Sin commits todavía.' : 'Este proyecto no usa Git.' }))),
-    h('p', { class: 'panel-note mono', text: project.path }));
+    h('p', { class: 'panel-note mono', text: project.kind === 'upload' ? `Subido al hosting · actualizado ${timeAgo(project.updatedAt || project.createdAt).toLowerCase()}` : project.path }));
   viewer.replaceChildren(body);
   if (readme) {
     api(`/api/projects/${id}/file?path=${encodeURIComponent(readme.path)}`).then((f) => {
