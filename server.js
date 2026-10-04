@@ -317,7 +317,11 @@ function createSession(user) {
 }
 
 function sessionToken(req) {
-  return parseCookies(req.headers.cookie)[COOKIE] || null;
+  const auth = String(req.headers.authorization || '');
+  if (auth.startsWith('Bearer ')) return auth.slice(7).trim() || null;
+  const cookie = parseCookies(req.headers.cookie)[COOKIE];
+  if (cookie) return cookie;
+  try { return new URL(req.url, 'http://x').searchParams.get('access_token') || null; } catch { return null; }
 }
 
 function getUser(req) {
@@ -641,7 +645,7 @@ route('POST', '/api/setup', null, async ({ req, res, ip }) => {
   activity(user, 'setup', 'Cuenta de administrador creada', ip);
   writeDbNow();
   log(`\x1b[32m✓\x1b[0m Hosting configurado. Administrador: ${user.username}`);
-  sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(req, createSession(user), config.sessionHours * 3600) });
+  { const token = createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
 });
 
 route('POST', '/api/login', null, async ({ req, res, ip }) => {
@@ -659,7 +663,7 @@ route('POST', '/api/login', null, async ({ req, res, ip }) => {
   user.lastLogin = Date.now();
   activity(user, 'login', '', ip);
   log(`\x1b[32m●\x1b[0m ${user.username} inició sesión desde ${ip}`);
-  sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(req, createSession(user), config.sessionHours * 3600) });
+  { const token = createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
 });
 
 route('POST', '/api/logout', null, ({ req, res, user, ip }) => {
@@ -726,7 +730,7 @@ route('POST', '/api/register', null, async ({ req, res, ip }) => {
   activity(user, 'register', `Con el código ${invite.code} (${ROLE_ES[user.role]})`, ip);
   writeDbNow();
   log(`\x1b[32m✓\x1b[0m Nueva cuenta: ${name} (${ROLE_ES[user.role]}) con el código ${invite.code}`);
-  sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(req, createSession(user), config.sessionHours * 3600) });
+  { const token = createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
 });
 
 route('POST', '/api/account/password', 'viewer', async ({ req, res, user, ip }) => {
@@ -1253,6 +1257,23 @@ async function serveStatic(req, res, pathname) {
   res.end(req.method === 'HEAD' ? undefined : data);
 }
 
+// ───────────────────────── Página en GitHub Pages (CORS) ─────────────────────────
+
+const PAGES_ORIGIN = 'https://noirstudio-web.github.io';
+function corsAllowed(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  const allowed = [PAGES_ORIGIN, ...(Array.isArray(config.allowedOrigins) ? config.allowedOrigins : [])];
+  if (!allowed.includes(origin)) return false;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With, Range');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Range, Content-Length, Accept-Ranges');
+  res.setHeader('Access-Control-Max-Age', '600');
+  return true;
+}
+
 // ───────────────────────── Servidor ─────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -1263,6 +1284,9 @@ const server = http.createServer(async (req, res) => {
   if (isHttps(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
   try {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname.startsWith('/api/') && corsAllowed(req, res)) {
+      if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+    }
     if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
     else await serveStatic(req, res, url.pathname);
   } catch (err) {

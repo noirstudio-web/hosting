@@ -141,6 +141,7 @@ async function supervise() {
     try {
       if (fs.existsSync(LOG) && fs.statSync(LOG).size > 5 * 1024 * 1024) fs.renameSync(LOG, `${LOG}.1`);
       fs.appendFileSync(LOG, `${new Date().toISOString()} ${line.replace(/\x1b\[[0-9;]*m/g, '')}\n`);
+      if (process.env.NOIR_DEV === '1') console.log(line);
     } catch { /* sin registro */ }
   };
   const state = { version: VERSION, startedAt: Date.now(), publicUrl: null, home: HOME };

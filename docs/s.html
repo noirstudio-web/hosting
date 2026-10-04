@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0c">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Archivo compartido · Noir Studio</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="share-page">
+  <svg class="sprite" width="0" height="0" aria-hidden="true">
+    <defs>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.38a1.5 1.5 0 0 1 1.06.44L11.5 8h8A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7.5A1.5 1.5 0 0 0 6 4.5v15A1.5 1.5 0 0 0 7.5 21h9a1.5 1.5 0 0 0 1.5-1.5V7zM14 3v4h4"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="1.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/></symbol>
+    </defs>
+  </svg>
+
+  <main class="login">
+    <div class="login-glow" aria-hidden="true"></div>
+    <div class="login-card share-card" id="card">
+      <div class="brand-mark lg" aria-hidden="true">N</div>
+      <div class="spinner" id="loading"></div>
+
+      <div id="error" hidden>
+        <h1 class="login-title">Enlace no disponible</h1>
+        <p class="login-sub" id="errorText"></p>
+      </div>
+
+      <div id="content" hidden>
+        <p class="share-from" id="from"></p>
+        <div class="share-file">
+          <span class="ftype" id="fileIcon"><svg class="ic"><use href="#i-file"/></svg></span>
+          <div class="share-meta">
+            <strong id="fileName"></strong>
+            <span id="fileInfo"></span>
+          </div>
+        </div>
+        <div class="share-preview" id="preview" hidden></div>
+
+        <form id="unlockForm" class="login-form" hidden>
+          <label class="field-label" for="sharePass">Este enlace está protegido</label>
+          <div class="input-wrap"><svg class="ic"><use href="#i-lock"/></svg><input id="sharePass" type="password" placeholder="Contraseña del enlace" required autocomplete="off"></div>
+          <button class="btn btn-primary btn-block" type="submit">Desbloquear</button>
+          <p class="form-error" id="unlockError" role="alert"></p>
+        </form>
+
+        <a class="btn btn-primary btn-block" id="downloadBtn" href="#" download hidden><svg class="ic"><use href="#i-download"/></svg>Descargar</a>
+        <p class="share-note" id="note"></p>
+      </div>
+    </div>
+    <p class="login-foot"><span class="dot live"></span><span><span id="studio">Noir Studio</span> · Enlace seguro</span></p>
+  </main>
+
+  <script src="connect.js"></script>
+  <script src="share.js"></script>
+</body>
+</html>

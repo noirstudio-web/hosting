@@ -31,6 +31,7 @@ console.log(`\n  ■ Publicando Noir Studio ${next}\n`);
 try {
   // 2. Enlace fijo firmado y ejecutable
   sh(process.execPath, ['scripts/prepare-relay.cjs']);
+  sh(process.execPath, ['scripts/build-pages.cjs']);
   sh(process.execPath, ['scripts/build-server.cjs']);
 
   // 3. Código a GitHub
