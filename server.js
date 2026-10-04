@@ -11,7 +11,7 @@ const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const ROOT = __dirname;
 const CONFIG_PATH = path.join(ROOT, 'config.json');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -273,7 +273,6 @@ function resolveIn(base, rel) {
   return full;
 }
 
-const resolveSafe = (rel) => resolveIn(STORAGE, rel);
 
 const relOf = (full) => path.relative(STORAGE, full).split(path.sep).join('/');
 const invalidateUsage = () => { usageCache.at = 0; };
@@ -355,56 +354,25 @@ setInterval(() => {
 }, 60 * 1000).unref();
 
 // ───────────────────────── Sistema de archivos ─────────────────────────
+// Los archivos del hosting pasan siempre por store(): disco de este PC u otro PC (ver lib/storage.js).
 
-async function walk(dir, visit, depth = 0) {
-  if (depth > 32) return;
-  let entries;
-  try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      if ((await visit(full, e, depth)) === false) return false;
-      if ((await walk(full, visit, depth + 1)) === false) return false;
-    } else if (e.isFile()) {
-      if ((await visit(full, e, depth)) === false) return false;
-    }
-  }
-}
+const store = () => ctx.store();
+const cleanRel = (rel) => String(rel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+const joinRel = (...parts) => parts.map(cleanRel).filter(Boolean).join('/');
+const baseName = (rel) => rel.split('/').pop();
+const parentRel = (rel) => rel.split('/').slice(0, -1).join('/');
 
-async function dirSize(dir) {
-  let total = 0;
-  await walk(dir, async (full, e) => {
-    if (e.isFile()) total += (await fsp.stat(full).catch(() => ({ size: 0 }))).size;
-  });
-  return total;
+function checkRel(rel) {
+  const r = cleanRel(rel);
+  if (r.includes('\0') || r.split('/').some((s) => s === '..')) throw new HttpError(400, 'Ruta inválida');
+  return r;
 }
 
 async function storageUsage() {
-  if (usageCache.value && Date.now() - usageCache.at < 60 * 1000) return usageCache.value;
-  const byKind = {};
-  let used = 0;
-  let files = 0;
-  let folders = 0;
-  await walk(STORAGE, async (full, e) => {
-    if (e.isDirectory()) { folders++; return; }
-    const size = (await fsp.stat(full).catch(() => ({ size: 0 }))).size;
-    const kind = KIND_OF[extOf(e.name)] || 'other';
-    byKind[kind] = byKind[kind] || { count: 0, size: 0 };
-    byKind[kind].count++;
-    byKind[kind].size += size;
-    used += size;
-    files++;
-  });
-  usageCache = { at: Date.now(), value: { used, files, folders, byKind } };
+  const s = store();
+  if (usageCache.value && usageCache.key === s.key && Date.now() - usageCache.at < 60 * 1000) return usageCache.value;
+  usageCache = { at: Date.now(), key: s.key, value: await s.usage() };
   return usageCache.value;
-}
-
-function uniquePath(dir, name) {
-  const ext = path.extname(name);
-  const base = name.slice(0, name.length - ext.length);
-  let candidate = path.join(dir, name);
-  for (let i = 1; fs.existsSync(candidate); i++) candidate = path.join(dir, `${base} (${i})${ext}`);
-  return candidate;
 }
 
 async function movePath(from, to) {
@@ -430,67 +398,69 @@ function rewriteSharePaths(oldRel, newRel) {
   if (changed) saveDb();
 }
 
-async function serveFile(req, res, full, { download = false } = {}) {
-  let st;
-  try { st = await fsp.stat(full); } catch { throw new HttpError(404, 'Archivo no encontrado'); }
-  if (!st.isFile()) throw new HttpError(400, 'No es un archivo');
-
-  const name = path.basename(full);
+// Envía un archivo con soporte de rangos (vídeo, audio, descargas reanudables).
+async function sendRanged(req, res, { name, size, mtime, open }, { download = false } = {}) {
   const ext = extOf(name);
   const isText = TEXT_EXT.has(ext);
   const inline = !download && (isText || Boolean(MIME[ext]));
-
   const headers = {
     'Content-Type': inline ? (isText ? 'text/plain; charset=utf-8' : MIME[ext]) : (MIME[ext] || 'application/octet-stream'),
     'Content-Disposition': contentDisposition(inline ? 'inline' : 'attachment', name),
     'Accept-Ranges': 'bytes',
-    'Last-Modified': st.mtime.toUTCString(),
+    'Last-Modified': new Date(mtime).toUTCString(),
     'Cache-Control': 'private, max-age=0, must-revalidate',
   };
   // Aísla el contenido servido (evita que un SVG/HTML subido ejecute scripts en este origen).
   if (ext !== 'pdf') headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'";
 
   let start = 0;
-  let end = st.size - 1;
+  let end = size - 1;
   let status = 200;
   const range = req.headers.range;
-  if (range && st.size > 0) {
+  if (range && size > 0) {
     const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
     if (m && (m[1] || m[2])) {
       if (m[1]) {
         start = Number(m[1]);
-        end = m[2] ? Math.min(Number(m[2]), st.size - 1) : st.size - 1;
+        end = m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
       } else {
-        start = Math.max(0, st.size - Number(m[2]));
+        start = Math.max(0, size - Number(m[2]));
       }
-      if (start > end || start >= st.size) {
-        res.writeHead(416, { 'Content-Range': `bytes */${st.size}` });
+      if (start > end || start >= size) {
+        res.writeHead(416, { 'Content-Range': `bytes */${size}` });
         return res.end();
       }
       status = 206;
-      headers['Content-Range'] = `bytes ${start}-${end}/${st.size}`;
+      headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
     }
   }
-  headers['Content-Length'] = st.size === 0 ? 0 : end - start + 1;
+  if (req.method === 'HEAD' || size === 0) {
+    res.writeHead(status, { ...headers, 'Content-Length': 0 });
+    return res.end();
+  }
+  const stream = await open(start, end);
+  headers['Content-Length'] = end - start + 1;
   res.writeHead(status, headers);
-  if (req.method === 'HEAD' || st.size === 0) return res.end();
-  const stream = fs.createReadStream(full, { start, end });
   stream.on('error', () => res.destroy());
   res.on('close', () => stream.destroy());
   stream.pipe(res);
 }
 
-async function collectZipEntries(full, prefix, out) {
-  const st = await fsp.stat(full);
-  if (st.isFile()) {
-    out.push({ abs: full, rel: prefix, isDir: false, size: st.size, mtime: st.mtime });
-    return;
-  }
-  if (!st.isDirectory()) return;
-  out.push({ abs: full, rel: prefix, isDir: true, size: 0, mtime: st.mtime });
-  for (const e of await fsp.readdir(full, { withFileTypes: true })) {
-    if (e.isDirectory() || e.isFile()) await collectZipEntries(path.join(full, e.name), `${prefix}/${e.name}`, out);
-  }
+// Archivo por ruta absoluta de este PC (código y bases de datos).
+async function serveFile(req, res, full, opts) {
+  let st;
+  try { st = await fsp.stat(full); } catch { throw new HttpError(404, 'Archivo no encontrado'); }
+  if (!st.isFile()) throw new HttpError(400, 'No es un archivo');
+  await sendRanged(req, res, { name: path.basename(full), size: st.size, mtime: st.mtimeMs, open: async (s, e) => fs.createReadStream(full, { start: s, end: e }) }, opts);
+}
+
+// Archivo del almacenamiento del hosting.
+async function serveStoreFile(req, res, rel, opts) {
+  const s = store();
+  const st = await s.stat(rel);
+  if (!st) throw new HttpError(404, 'Archivo no encontrado');
+  if (st.type !== 'file') throw new HttpError(400, 'No es un archivo');
+  await sendRanged(req, res, { name: baseName(rel), size: st.size, mtime: st.mtime, open: (a, b) => s.openRead(rel, a, b) }, opts);
 }
 
 function dosDateTime(d) {
@@ -501,24 +471,32 @@ function dosDateTime(d) {
   };
 }
 
-async function zipTargets(fulls) {
+// Lista de entradas para un ZIP a partir de rutas del almacenamiento.
+async function zipTargets(rels) {
+  const s = store();
   const entries = [];
-  for (const full of fulls) {
-    if (full === STORAGE) {
-      for (const e of await fsp.readdir(full, { withFileTypes: true })) {
-        if (e.isDirectory() || e.isFile()) await collectZipEntries(path.join(full, e.name), e.name, entries);
-      }
-    } else {
-      try { await collectZipEntries(full, path.basename(full), entries); } catch { throw new HttpError(404, `No existe: ${relOf(full)}`); }
+  const fileEntry = (rel, zipRel, st) => ({ rel: zipRel, isDir: false, size: st.size, mtime: new Date(st.mtime), open: () => s.openRead(rel, 0, Math.max(0, st.size - 1)) });
+  for (const raw of rels) {
+    const r = checkRel(raw);
+    const st = await s.stat(r);
+    if (!st) throw new HttpError(404, `No existe: /${r}`);
+    const prefix = r ? baseName(r) : '';
+    if (st.type === 'file') { entries.push(fileEntry(r, prefix, st)); continue; }
+    if (r) entries.push({ rel: prefix, isDir: true, size: 0, mtime: new Date(st.mtime) });
+    for (const e of await s.walk(r)) {
+      const inner = r ? e.rel.slice(r.length + 1) : e.rel;
+      const zipRel = prefix ? `${prefix}/${inner}` : inner;
+      entries.push(e.type === 'dir' ? { rel: zipRel, isDir: true, size: 0, mtime: new Date(e.mtime) } : fileEntry(e.rel, zipRel, e));
     }
   }
-  const total = entries.reduce((s, e) => s + e.size + 100 + Buffer.byteLength(e.rel) * 2, 0);
+  const total = entries.reduce((sum, e) => sum + e.size + 100 + Buffer.byteLength(e.rel) * 2, 0);
   if (total > ZIP_LIMIT || entries.length > 65000) {
     throw new HttpError(413, 'La selección supera 4 GB. Descarga los archivos grandes por separado.');
   }
   return entries;
 }
 
+// entries: { rel, isDir, size, mtime: Date, open?: () => Promise<Readable>, abs?: ruta local }
 async function streamZip(res, entries, zipName) {
   res.writeHead(200, {
     'Content-Type': 'application/zip',
@@ -547,7 +525,8 @@ async function streamZip(res, entries, zipName) {
       let crc = 0;
       let size = 0;
       if (!e.isDir) {
-        for await (const chunk of fs.createReadStream(e.abs)) {
+        const src = e.open ? (e.size ? await e.open() : []) : fs.createReadStream(e.abs);
+        for await (const chunk of src) {
           crc = crc32(chunk, crc);
           size += chunk.length;
           await w(chunk);
@@ -758,75 +737,47 @@ route('POST', '/api/account/password', 'viewer', async ({ req, res, user, ip }) 
 
 // ── Archivos
 
+const storeInfo = () => ({ kind: store().kind, name: ctx.storeLabel() });
+const trashOfStore = () => db.trash.filter((t) => (t.store || 'local') === store().key);
+
 route('GET', '/api/list', 'viewer', async ({ res, url }) => {
-  const dir = resolveSafe(url.searchParams.get('path'));
-  let entries;
-  try {
-    if (!(await fsp.stat(dir)).isDirectory()) throw new Error();
-    entries = await fsp.readdir(dir, { withFileTypes: true });
-  } catch {
-    throw new HttpError(404, 'La carpeta no existe');
-  }
-  const items = [];
-  for (const e of entries) {
-    if (!e.isDirectory() && !e.isFile()) continue;
-    try {
-      const st = await fsp.stat(path.join(dir, e.name));
-      items.push({ name: e.name, type: e.isDirectory() ? 'dir' : 'file', size: e.isFile() ? st.size : null, mtime: st.mtimeMs });
-    } catch { /* inaccesible */ }
-  }
-  sendJson(res, 200, { path: relOf(dir), items });
+  const rel = checkRel(url.searchParams.get('path'));
+  const items = await store().list(rel);
+  sendJson(res, 200, { path: rel, items, storage: storeInfo() });
 });
 
 route('GET', '/api/search', 'viewer', async ({ res, url }) => {
-  const q = String(url.searchParams.get('q') || '').trim().toLowerCase();
+  const q = String(url.searchParams.get('q') || '').trim();
   if (q.length < 2) throw new HttpError(400, 'Escribe al menos 2 caracteres');
-  const results = [];
-  let truncated = false;
-  await walk(STORAGE, async (full, e) => {
-    if (!e.name.toLowerCase().includes(q)) return;
-    if (results.length >= 300) { truncated = true; return false; }
-    const st = await fsp.stat(full).catch(() => null);
-    if (!st) return;
-    const rel = relOf(full);
-    results.push({ name: e.name, path: rel, parent: rel.split('/').slice(0, -1).join('/'), type: e.isDirectory() ? 'dir' : 'file', size: e.isFile() ? st.size : null, mtime: st.mtimeMs });
-  });
-  sendJson(res, 200, { results, truncated });
+  sendJson(res, 200, await store().search(q, 300));
 });
 
 route('GET', '/api/folders', 'viewer', async ({ res, url }) => {
-  const dir = resolveSafe(url.searchParams.get('path'));
-  let entries = [];
-  try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { throw new HttpError(404, 'La carpeta no existe'); }
-  sendJson(res, 200, { path: relOf(dir), folders: entries.filter((e) => e.isDirectory()).map((e) => e.name).sort((a, b) => a.localeCompare(b, 'es', { numeric: true })) });
+  const rel = checkRel(url.searchParams.get('path'));
+  sendJson(res, 200, { path: rel, folders: await store().folders(rel) });
 });
 
 route('GET', '/api/stats', 'viewer', async ({ res }) => {
-  const usage = await storageUsage();
-  let disk = null;
-  try {
-    const s = await fsp.statfs(STORAGE);
-    disk = { total: s.blocks * s.bsize, free: s.bavail * s.bsize };
-  } catch { /* statfs no disponible */ }
-  sendJson(res, 200, { ...usage, disk, host: os.hostname(), studio: config.studioName, trash: db.trash.length });
+  const s = store();
+  const [usage, disk] = await Promise.all([storageUsage(), s.disk()]);
+  sendJson(res, 200, { ...usage, disk, host: os.hostname(), studio: config.studioName, trash: trashOfStore().length, storage: storeInfo() });
 });
 
 route('GET', '/api/file', 'viewer', async ({ req, res, url, user, ip }) => {
-  const full = resolveSafe(url.searchParams.get('path'));
+  const rel = checkRel(url.searchParams.get('path'));
   const download = url.searchParams.get('dl') === '1';
   if (download && !req.headers.range) {
-    activity(user, 'download', relOf(full), ip);
-    log(`↓ ${user.username} descargó ${relOf(full)}`);
+    activity(user, 'download', rel, ip);
+    log(`↓ ${user.username} descargó ${rel}`);
   }
-  await serveFile(req, res, full, { download });
+  await serveStoreFile(req, res, rel, { download });
 });
 
 route('GET', '/api/zip', 'viewer', async ({ res, url, user, ip }) => {
-  const targets = url.searchParams.getAll('path');
+  const targets = url.searchParams.getAll('path').map(checkRel);
   if (!targets.length) throw new HttpError(400, 'Nada que comprimir');
-  const fulls = targets.map(resolveSafe);
-  const entries = await zipTargets(fulls);
-  const zipName = fulls.length === 1 && fulls[0] !== STORAGE ? `${path.basename(fulls[0])}.zip` : `${config.studioName}.zip`;
+  const entries = await zipTargets(targets);
+  const zipName = targets.length === 1 && targets[0] ? `${baseName(targets[0])}.zip` : `${config.studioName}.zip`;
   activity(user, 'zip', `${zipName} (${entries.length} elementos)`, ip);
   log(`↓ ${user.username} descargó ${zipName}`);
   await streamZip(res, entries, zipName);
@@ -836,10 +787,10 @@ route('POST', '/api/mkdir', 'editor', async ({ req, res, user, ip }) => {
   const { path: rel, name } = await readJson(req);
   const clean = validName(name);
   if (!clean) throw new HttpError(400, 'Nombre de carpeta no válido');
-  const target = resolveSafe(relOf(path.join(resolveSafe(rel), clean)));
-  if (fs.existsSync(target)) throw new HttpError(409, 'Ya existe un elemento con ese nombre');
-  await fsp.mkdir(target, { recursive: true });
-  activity(user, 'mkdir', relOf(target), ip);
+  const target = joinRel(checkRel(rel), clean);
+  if (await store().stat(target)) throw new HttpError(409, 'Ya existe un elemento con ese nombre');
+  await store().mkdir(target);
+  activity(user, 'mkdir', target, ip);
   sendJson(res, 200, { ok: true, name: clean });
 });
 
@@ -847,66 +798,60 @@ route('POST', '/api/rename', 'editor', async ({ req, res, user, ip }) => {
   const { path: rel, name } = await readJson(req);
   const clean = validName(name);
   if (!clean) throw new HttpError(400, 'Nombre no válido');
-  const from = resolveSafe(rel);
-  if (from === STORAGE) throw new HttpError(400, 'No se puede renombrar la raíz');
-  if (!fs.existsSync(from)) throw new HttpError(404, 'El elemento no existe');
-  const to = path.join(path.dirname(from), clean);
-  if (to.toLowerCase() !== from.toLowerCase() && fs.existsSync(to)) throw new HttpError(409, 'Ya existe un elemento con ese nombre');
-  await movePath(from, to);
-  rewriteSharePaths(relOf(from), relOf(to));
-  activity(user, 'rename', `${relOf(from)} → ${clean}`, ip);
+  const from = checkRel(rel);
+  if (!from) throw new HttpError(400, 'No se puede renombrar la raíz');
+  const s = store();
+  if (!(await s.stat(from))) throw new HttpError(404, 'El elemento no existe');
+  const to = joinRel(parentRel(from), clean);
+  if (to.toLowerCase() !== from.toLowerCase() && (await s.stat(to))) throw new HttpError(409, 'Ya existe un elemento con ese nombre');
+  await s.rename(from, to);
+  rewriteSharePaths(from, to);
+  activity(user, 'rename', `${from} → ${clean}`, ip);
   sendJson(res, 200, { ok: true, name: clean });
 });
 
 async function transfer({ req, res, user, ip }, mode) {
   const { paths, dest } = await readJson(req);
   if (!Array.isArray(paths) || !paths.length) throw new HttpError(400, 'Nada seleccionado');
-  const destDir = resolveSafe(dest);
-  if (!(await fsp.stat(destDir).catch(() => null))?.isDirectory()) throw new HttpError(404, 'La carpeta de destino no existe');
+  const s = store();
+  const destRel = checkRel(dest);
+  if ((await s.stat(destRel))?.type !== 'dir') throw new HttpError(404, 'La carpeta de destino no existe');
   let count = 0;
-  for (const rel of paths) {
-    const from = resolveSafe(rel);
-    if (from === STORAGE) throw new HttpError(400, 'No se puede mover la raíz');
-    if (!fs.existsSync(from)) continue;
-    if (destDir === from || destDir.startsWith(from + path.sep)) throw new HttpError(400, `No puedes ${mode === 'move' ? 'mover' : 'copiar'} “${path.basename(from)}” dentro de sí misma`);
-    if (mode === 'move' && path.dirname(from) === destDir) continue;
-    const to = uniquePath(destDir, path.basename(from));
+  for (const raw of paths) {
+    const from = checkRel(raw);
+    if (!from) throw new HttpError(400, 'No se puede mover la raíz');
+    if (!(await s.stat(from))) continue;
+    if (destRel === from || destRel.startsWith(`${from}/`)) throw new HttpError(400, `No puedes ${mode === 'move' ? 'mover' : 'copiar'} “${baseName(from)}” dentro de sí misma`);
+    if (mode === 'move' && parentRel(from) === destRel) continue;
+    const to = joinRel(destRel, await s.unique(destRel, baseName(from)));
     if (mode === 'move') {
-      await movePath(from, to);
-      rewriteSharePaths(relOf(from), relOf(to));
+      await s.rename(from, to);
+      rewriteSharePaths(from, to);
     } else {
-      await fsp.cp(from, to, { recursive: true, errorOnExist: true });
+      await s.copy(from, to);
     }
     count++;
   }
   invalidateUsage();
-  activity(user, mode, `${count} elemento(s) → /${relOf(destDir)}`, ip);
+  activity(user, mode, `${count} elemento(s) → /${destRel}`, ip);
   sendJson(res, 200, { ok: true, count });
 }
 
-route('POST', '/api/move', 'editor', (ctx) => transfer(ctx, 'move'));
-route('POST', '/api/copy', 'editor', (ctx) => transfer(ctx, 'copy'));
+route('POST', '/api/move', 'editor', (c) => transfer(c, 'move'));
+route('POST', '/api/copy', 'editor', (c) => transfer(c, 'copy'));
 
 route('POST', '/api/delete', 'editor', async ({ req, res, user, ip }) => {
   const { paths } = await readJson(req);
   if (!Array.isArray(paths) || !paths.length) throw new HttpError(400, 'Nada que eliminar');
-  for (const rel of paths) {
-    const full = resolveSafe(rel);
-    if (full === STORAGE) throw new HttpError(400, 'No se puede eliminar la raíz');
-    const st = await fsp.stat(full).catch(() => null);
-    if (!st) continue;
+  const s = store();
+  for (const raw of paths) {
+    const rel = checkRel(raw);
+    if (!rel) throw new HttpError(400, 'No se puede eliminar la raíz');
     const id = crypto.randomBytes(8).toString('hex');
-    const holder = path.join(TRASH_DIR, id);
-    await fsp.mkdir(holder, { recursive: true });
-    const size = st.isDirectory() ? await dirSize(full) : st.size;
-    try {
-      await movePath(full, path.join(holder, path.basename(full)));
-    } catch (err) {
-      await fsp.rm(holder, { recursive: true, force: true });
-      throw err;
-    }
-    db.trash.push({ id, name: path.basename(full), original: relOf(full), isDir: st.isDirectory(), size, deletedAt: Date.now(), deletedBy: user.username });
-    activity(user, 'delete', relOf(full), ip);
+    const info = await s.trash(rel, id);
+    if (!info) continue;
+    db.trash.push({ id, name: baseName(rel), original: rel, isDir: info.isDir, size: info.size, deletedAt: Date.now(), deletedBy: user.username, store: s.key });
+    activity(user, 'delete', rel, ip);
   }
   invalidateUsage();
   saveDb();
@@ -916,23 +861,19 @@ route('POST', '/api/delete', 'editor', async ({ req, res, user, ip }) => {
 // ── Papelera
 
 route('GET', '/api/trash', 'editor', ({ res }) => {
-  sendJson(res, 200, { items: [...db.trash].sort((a, b) => b.deletedAt - a.deletedAt), days: config.trashDays });
+  sendJson(res, 200, { items: [...trashOfStore()].sort((a, b) => b.deletedAt - a.deletedAt), days: config.trashDays });
 });
 
 route('POST', '/api/trash/restore', 'editor', async ({ req, res, user, ip }) => {
   const { ids } = await readJson(req);
+  const s = store();
   let restored = 0;
   for (const id of Array.isArray(ids) ? ids : []) {
-    const item = db.trash.find((t) => t.id === id);
+    const item = trashOfStore().find((t) => t.id === id);
     if (!item) continue;
-    const src = path.join(TRASH_DIR, item.id, item.name);
-    const target = resolveSafe(item.original);
-    await fsp.mkdir(path.dirname(target), { recursive: true });
-    const dest = uniquePath(path.dirname(target), path.basename(target));
-    await movePath(src, dest);
-    await fsp.rm(path.join(TRASH_DIR, item.id), { recursive: true, force: true });
-    db.trash = db.trash.filter((t) => t.id !== id);
-    activity(user, 'restore', relOf(dest), ip);
+    const finalRel = await s.restore(item.id, item.name, item.original);
+    db.trash = db.trash.filter((t) => t !== item);
+    activity(user, 'restore', finalRel, ip);
     restored++;
   }
   invalidateUsage();
@@ -942,16 +883,18 @@ route('POST', '/api/trash/restore', 'editor', async ({ req, res, user, ip }) => 
 
 async function purgeTrash(ids) {
   for (const id of ids) {
-    if (!/^[a-f0-9]{16}$/.test(id)) continue;
-    await fsp.rm(path.join(TRASH_DIR, id), { recursive: true, force: true });
-    db.trash = db.trash.filter((t) => t.id !== id);
+    const item = db.trash.find((t) => t.id === id);
+    if (!item) continue;
+    const s = ctx.storeByKey(item.store || 'local');
+    if (s) await s.purge(id).catch(() => {});
+    db.trash = db.trash.filter((t) => t !== item);
   }
   saveDb();
 }
 
 route('POST', '/api/trash/purge', 'admin', async ({ req, res, user, ip }) => {
   const { ids, all } = await readJson(req);
-  const list = all ? db.trash.map((t) => t.id) : (Array.isArray(ids) ? ids : []);
+  const list = all ? trashOfStore().map((t) => t.id) : (Array.isArray(ids) ? ids : []);
   await purgeTrash(list);
   activity(user, all ? 'empty_trash' : 'purge', `${list.length} elemento(s)`, ip);
   sendJson(res, 200, { ok: true });
@@ -960,27 +903,31 @@ route('POST', '/api/trash/purge', 'admin', async ({ req, res, user, ip }) => {
 // ── Enlaces compartidos
 
 const shareActive = (s) => (!s.expiresAt || s.expiresAt > Date.now()) && (!s.maxDownloads || s.downloads < s.maxDownloads);
-const shareView = (s) => ({ ...s, passwordHash: undefined, hasPassword: Boolean(s.passwordHash), active: shareActive(s), exists: fs.existsSync(resolveSafe(s.path)) });
+async function shareView(s) {
+  const st = await store().stat(s.path).catch(() => null);
+  return { ...s, passwordHash: undefined, hasPassword: Boolean(s.passwordHash), active: shareActive(s), exists: Boolean(st) };
+}
 
-route('GET', '/api/shares', 'editor', ({ res, user }) => {
+route('GET', '/api/shares', 'editor', async ({ res, user }) => {
   const list = db.shares.filter((s) => user.role === 'admin' || s.createdBy === user.username);
-  sendJson(res, 200, { items: list.map(shareView).sort((a, b) => b.createdAt - a.createdAt) });
+  const items = await Promise.all(list.map(shareView));
+  sendJson(res, 200, { items: items.sort((a, b) => b.createdAt - a.createdAt) });
 });
 
 route('POST', '/api/shares', 'editor', async ({ req, res, user, ip }) => {
-  const { path: rel, hours, password, maxDownloads } = await readJson(req);
-  const full = resolveSafe(rel);
-  if (full === STORAGE) throw new HttpError(400, 'No se puede compartir todo el almacenamiento');
-  const st = await fsp.stat(full).catch(() => null);
+  const { path: raw, hours, password, maxDownloads } = await readJson(req);
+  const rel = checkRel(raw);
+  if (!rel) throw new HttpError(400, 'No se puede compartir todo el almacenamiento');
+  const st = await store().stat(rel);
   if (!st) throw new HttpError(404, 'El elemento no existe');
   const h = Number(hours) || 0;
   const max = Math.max(0, Math.floor(Number(maxDownloads) || 0));
   if (password) validatePassword(password);
   const share = {
     token: crypto.randomBytes(18).toString('base64url'),
-    path: relOf(full),
-    name: path.basename(full),
-    isDir: st.isDirectory(),
+    path: rel,
+    name: baseName(rel),
+    isDir: st.type === 'dir',
     createdBy: user.username,
     createdAt: Date.now(),
     expiresAt: h > 0 ? Date.now() + h * 3600 * 1000 : null,
@@ -991,7 +938,7 @@ route('POST', '/api/shares', 'editor', async ({ req, res, user, ip }) => {
   db.shares.push(share);
   saveDb();
   activity(user, 'share_create', share.path, ip);
-  sendJson(res, 200, { ok: true, share: shareView(share) });
+  sendJson(res, 200, { ok: true, share: await shareView(share) });
 });
 
 route('DELETE', '/api/shares/:token', 'editor', ({ res, params, user, ip }) => {
@@ -1007,22 +954,21 @@ route('DELETE', '/api/shares/:token', 'editor', ({ res, params, user, ip }) => {
 // Acceso público a un enlace compartido
 const shareKey = (s) => crypto.createHmac('sha256', db.secret).update(`${s.token}:${s.passwordHash || ''}`).digest('base64url').slice(0, 32);
 
-function getShare(token) {
+async function getShare(token) {
   const s = db.shares.find((x) => x.token === token);
   if (!s || !shareActive(s)) throw new HttpError(404, 'Este enlace no existe o ha caducado');
-  const full = resolveSafe(s.path);
-  if (!fs.existsSync(full)) throw new HttpError(404, 'El archivo compartido ya no está disponible');
-  return { s, full };
+  const st = await store().stat(s.path);
+  if (!st) throw new HttpError(404, 'El archivo compartido ya no está disponible');
+  return { s, st };
 }
 
 route('GET', '/api/public/share/:token', null, async ({ res, params }) => {
-  const { s, full } = getShare(params.token);
-  const st = await fsp.stat(full);
+  const { s, st } = await getShare(params.token);
   sendJson(res, 200, {
     name: s.name,
-    isDir: st.isDirectory(),
-    size: st.isDirectory() ? await dirSize(full) : st.size,
-    mtime: st.mtimeMs,
+    isDir: st.type === 'dir',
+    size: st.type === 'dir' ? await store().dirSize(s.path) : st.size,
+    mtime: st.mtime,
     expiresAt: s.expiresAt,
     remaining: s.maxDownloads ? s.maxDownloads - s.downloads : null,
     needsPassword: Boolean(s.passwordHash),
@@ -1033,7 +979,7 @@ route('GET', '/api/public/share/:token', null, async ({ res, params }) => {
 
 route('POST', '/api/public/share/:token/unlock', null, async ({ req, res, params, ip }) => {
   checkLimit(ip);
-  const { s } = getShare(params.token);
+  const { s } = await getShare(params.token);
   const { password } = await readJson(req);
   if (!s.passwordHash || !verifyPassword(String(password || ''), s.passwordHash)) {
     await failLimit(ip);
@@ -1043,21 +989,20 @@ route('POST', '/api/public/share/:token/unlock', null, async ({ req, res, params
 });
 
 route('GET', '/api/public/share/:token/file', null, async ({ req, res, url, params, ip }) => {
-  const { s, full } = getShare(params.token);
+  const { s, st } = await getShare(params.token);
   if (s.passwordHash && url.searchParams.get('key') !== shareKey(s)) throw new HttpError(401, 'Este enlace está protegido con contraseña');
   const download = url.searchParams.get('dl') === '1';
-  const st = await fsp.stat(full);
   if (download && !req.headers.range) {
     s.downloads++;
     saveDb();
     activity({ username: `enlace · ${s.createdBy}` }, 'share_download', s.path, ip);
     log(`↓ Descarga por enlace compartido: ${s.path}`);
   }
-  if (st.isDirectory()) {
+  if (st.type === 'dir') {
     if (!download) throw new HttpError(400, 'Las carpetas solo se pueden descargar');
-    return streamZip(res, await zipTargets([full]), `${s.name}.zip`);
+    return streamZip(res, await zipTargets([s.path]), `${s.name}.zip`);
   }
-  await serveFile(req, res, full, { download });
+  await serveStoreFile(req, res, s.path, { download });
 });
 
 // ── Usuarios (administración)
@@ -1126,7 +1071,8 @@ route('GET', '/api/settings', 'viewer', ({ res }) => {
     publicUrl: publicBase(),
     fixedUrl: process.env.NOIR_FIXED_URL || null,
     lanUrls: lanAddresses().map((ip) => `http://${ip}:${config.port}`),
-    storagePath: STORAGE,
+    storagePath: store().kind === 'local' ? STORAGE : `${store().agent.name}: ${store().agent.root}`,
+    storageKind: store().kind,
     host: os.hostname(),
     version: VERSION,
     node: process.version,
@@ -1160,30 +1106,23 @@ route('POST', '/api/settings', 'admin', async ({ req, res, user, ip }) => {
 
 // ── Subidas por fragmentos (reanudables)
 
-// Zona de destino de una subida: archivos (storage/) o bases de datos (databases/).
+// Zona de destino de una subida: archivos del hosting o bases de datos (siempre en este PC).
 function uploadTarget(url) {
   const area = url.searchParams.get('area') === 'db' ? 'db' : 'files';
-  const dir = area === 'db' ? ctx.DB_DIR : resolveSafe(url.searchParams.get('path'));
+  const dirRel = area === 'db' ? '' : checkRel(url.searchParams.get('path'));
   const name = validName(url.searchParams.get('name'));
   const size = Number(url.searchParams.get('size'));
   if (!name || (area === 'db' && name.startsWith('.'))) throw new HttpError(400, 'Nombre de archivo no válido');
   if (!Number.isSafeInteger(size) || size < 0) throw new HttpError(400, 'Tamaño no válido');
-  const id = crypto.createHash('sha256').update(`${area}\0${dir}\0${name}\0${size}`).digest('hex').slice(0, 40);
-  return { area, dir, name, size, id, part: path.join(TMP_DIR, `${id}.part`) };
-}
-
-async function partSize(part) {
-  try { return (await fsp.stat(part)).size; } catch { return 0; }
+  const s = area === 'db' ? ctx.localStore : store();
+  const id = crypto.createHash('sha256').update(`${area}\0${s.key}\0${dirRel}\0${name}\0${size}`).digest('hex').slice(0, 40);
+  return { area, dirRel, name, size, id, s };
 }
 
 route('GET', '/api/upload/status', 'editor', async ({ res, url }) => {
   const t = uploadTarget(url);
-  await fsp.mkdir(t.dir, { recursive: true });
-  let offset = await partSize(t.part);
-  if (offset > t.size && !uploadLocks.has(t.id)) {
-    await fsp.rm(t.part, { force: true });
-    offset = 0;
-  }
+  if (t.area === 'files') await t.s.mkdir(t.dirRel);
+  const offset = uploadLocks.has(t.id) ? await t.s.partSize(t.id) : await t.s.resetPart(t.id, t.size);
   sendJson(res, 200, { offset });
 });
 
@@ -1196,43 +1135,27 @@ route('PUT', '/api/upload', 'editor', async ({ req, res, url, user, ip }) => {
 
   uploadLocks.add(t.id);
   try {
-    const current = await partSize(t.part);
-    if (offset !== current) {
+    let now;
+    try {
+      now = await t.s.appendPart(t.id, offset, req, maxChunk, t.size);
+    } catch (err) {
       req.resume();
-      return sendJson(res, 409, { error: 'Desfase de subida', offset: current });
+      throw err;
     }
-    let written = 0;
-    await new Promise((resolve, reject) => {
-      const out = fs.createWriteStream(t.part, { flags: 'a' });
-      const fail = (err) => { out.destroy(); req.destroy(); reject(err); };
-      req.on('data', (chunk) => {
-        written += chunk.length;
-        if (written > maxChunk || current + written > t.size) fail(new HttpError(413, 'El fragmento excede el tamaño declarado'));
-      });
-      req.on('close', () => { if (!req.complete) fail(new HttpError(499, 'Subida interrumpida')); });
-      req.on('error', fail);
-      out.on('error', fail);
-      out.on('finish', resolve);
-      req.pipe(out);
-    });
-
-    const now = current + written;
     if (now < t.size) return sendJson(res, 200, { offset: now, done: false });
 
-    await fsp.mkdir(t.dir, { recursive: true });
-    if (!fs.existsSync(t.part)) await fsp.writeFile(t.part, '');
     if (t.area === 'db') {
-      const replaced = await ctx.finalizeDbUpload(t.part, t.name);
+      const replaced = await ctx.finalizeDbUpload(ctx.localStore.partPath(t.id), t.name);
       activity(user, 'db_upload', `${t.name} (${fmtBytes(t.size)})${replaced ? ' · versión anterior guardada' : ''}`, ip);
       log(`↑ ${user.username} subió la base de datos ${t.name} (${fmtBytes(t.size)})`);
       return sendJson(res, 200, { offset: now, done: true, name: t.name });
     }
-    const finalPath = uniquePath(t.dir, t.name);
-    await movePath(t.part, finalPath);
+    const finalName = await t.s.finishPart(t.id, t.dirRel, t.name);
+    const rel = joinRel(t.dirRel, finalName);
     invalidateUsage();
-    activity(user, 'upload', `${relOf(finalPath)} (${fmtBytes(t.size)})`, ip);
-    log(`↑ ${user.username} subió ${relOf(finalPath)} (${fmtBytes(t.size)})`);
-    sendJson(res, 200, { offset: now, done: true, name: path.basename(finalPath) });
+    activity(user, 'upload', `${rel} (${fmtBytes(t.size)})`, ip);
+    log(`↑ ${user.username} subió ${rel} (${fmtBytes(t.size)})${t.s.kind === 'remote' ? ` → ${t.s.agent.name}` : ''}`);
+    sendJson(res, 200, { offset: now, done: true, name: finalName });
   } finally {
     uploadLocks.delete(t.id);
   }
@@ -1240,14 +1163,17 @@ route('PUT', '/api/upload', 'editor', async ({ req, res, url, user, ip }) => {
 
 route('DELETE', '/api/upload', 'editor', async ({ res, url }) => {
   const t = uploadTarget(url);
-  if (!uploadLocks.has(t.id)) await fsp.rm(t.part, { force: true });
+  if (!uploadLocks.has(t.id)) await t.s.cancelPart(t.id);
   sendJson(res, 200, { ok: true });
 });
 
 // ───────────────────────── Módulos: código y bases de datos ─────────────────────────
 
 const ctx = {
-  ROOT, DATA_DIR,
+  ROOT, DATA_DIR, STORAGE,
+  publicBase: () => publicBase(),
+  lanUrls: () => lanAddresses().map((ip) => `http://${ip}:${config.port}`),
+  invalidateUsage: () => invalidateUsage(),
   DB_DIR: path.join(ROOT, 'databases'),
   BIN_DIR: path.join(ROOT, 'bin'),
   db, route, HttpError, sendJson, readJson, activity, saveDb, writeDbNow, log,
@@ -1261,6 +1187,7 @@ const ctx = {
     for (const [k, v] of Object.entries(patch)) if (v === undefined) delete config[k];
   },
 };
+require('./lib/storage')(ctx);
 require('./lib/projects')(ctx);
 require('./lib/databases')(ctx);
 
@@ -1314,7 +1241,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
     else await serveStatic(req, res, url.pathname);
   } catch (err) {
-    const status = err instanceof HttpError ? err.status : 500;
+    const status = err instanceof HttpError || err.expose ? err.status : 500;
     if (status === 500) log('\x1b[31mError:\x1b[0m', err.stack || err);
     if (!res.headersSent) sendJson(res, status, { error: status === 500 ? 'Error interno del servidor' : err.message, ...err.extra });
     else res.destroy();

@@ -14,6 +14,18 @@ Servidor de archivos privado para acceder a este computador desde cualquier otro
 >
 > ¿Perdiste el código de configuración? Está en `data/codigo-configuracion.txt` hasta que se crea la primera cuenta.
 
+## Guardar los archivos en otro PC
+
+El panel se queda en este PC y **otro PC presta su disco** como almacenamiento del hosting:
+
+1. En el panel ve a **Almacenamiento → Descargar app** (puedes hacerlo desde el otro PC entrando al panel, o copiar el archivo con una USB).
+2. En el otro PC, doble clic en **NoirAlmacenamiento.exe**.
+   - Si Windows muestra *«Windows protegió su PC»*: **Más información → Ejecutar de todas formas**.
+   - Si pregunta por el firewall: **Permitir**.
+3. Listo: se vincula sola, elige el disco con más espacio, arranca con Windows y, si es el primer PC que vinculas, pasa a ser el almacenamiento.
+
+Funciona aunque los dos PCs estén en redes distintas (usa un túnel seguro); en la misma red usa la conexión local, más rápida. **Ambos PCs deben estar encendidos.** En **Almacenamiento** puedes ver si está conectado, su espacio libre, cambiar entre discos y copiar los archivos de este PC al otro.
+
 ## Qué incluye
 
 | Sección | Qué puedes hacer |
@@ -38,12 +50,14 @@ Atajos: `/` buscar · `Supr` papelera · `F2` renombrar · `Ctrl+A` seleccionar 
 | `INICIAR.bat` | Arranca el servidor y el enlace por internet |
 | `INICIAR (solo red local).bat` | Solo para equipos conectados al mismo WiFi/router |
 | `RESTABLECER CONTRASENA.bat` | Si olvidas una contraseña: la cambia desde este equipo |
+| `CONSTRUIR APP ALMACENAMIENTO.bat` | Vuelve a generar la app del PC de almacenamiento (se hace sola la primera vez) |
 | `ACTIVAR INICIO AUTOMATICO.bat` | El hosting arranca solo cada vez que inicias sesión en Windows (activado) |
 | `QUITAR INICIO AUTOMATICO.bat` | Desactiva el arranque automático |
 | `storage/` | Aquí se guardan tus archivos |
 | `databases/` | Bases de datos subidas y su historial de versiones |
 | `data/` | Usuarios, enlaces, códigos, papelera y actividad |
-| `lib/` | Módulos del servidor (código y bases de datos) |
+| `lib/` | Módulos del servidor (almacenamiento, código y bases de datos) |
+| `agent/` | Código de la app NoirAlmacenamiento |
 | `config.json` | Ajustes técnicos |
 
 ## Seguridad

@@ -6,3 +6,4 @@ bin/
 *.log
 data/
 databases/
+agent/dist/

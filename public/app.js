@@ -587,13 +587,21 @@ async function loadStats() {
     setStudio(s.studio);
     $('#usedText').textContent = `${fmtSize(s.used)} en el hosting`;
     $('#trashCount').textContent = s.trash ? String(s.trash) : '';
+    $('#storageWhere').textContent = s.storage ? `Guardando en: ${s.storage.name}` : '';
+    $('#storageWhere').classList.remove('err');
     if (s.disk) {
       const pct = ((s.disk.total - s.disk.free) / s.disk.total) * 100;
       $('#diskFill').style.width = `${Math.max(2, pct).toFixed(1)}%`;
       $('#freeText').textContent = `${fmtSize(s.disk.free)} libres`;
     }
     return s;
-  } catch { return null; }
+  } catch (err) {
+    if (err.status === 503) {
+      $('#storageWhere').textContent = 'Sin conexión con el PC de almacenamiento';
+      $('#storageWhere').classList.add('err');
+    }
+    return null;
+  }
 }
 
 function emptyState(ic, title, text, action) {
@@ -1306,6 +1314,11 @@ const ACTIONS = {
   project_add: ['code', 'añadió el proyecto', 'users'],
   project_remove: ['code', 'quitó el proyecto', 'users'],
   project_zip: ['code', 'descargó el código de', 'files'],
+  storage_mode: ['server', 'cambió el almacenamiento a', 'users'],
+  storage_migrate: ['copy', 'copió los archivos:', 'users'],
+  agent_download: ['download', 'descargó la app de almacenamiento', 'users'],
+  agent_pair: ['server', 'vinculó el PC de almacenamiento', 'users'],
+  agent_remove: ['server', 'desvinculó el PC de almacenamiento', 'users'],
 };
 
 let activityFilter = 'all';

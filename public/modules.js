@@ -497,9 +497,121 @@ async function renderDbVersions(name, pane) {
   }
 }
 
+// ═════════════════════════ Almacenamiento ═════════════════════════
+
+let storagePoll = null;
+
+function diskBar(disk) {
+  if (!disk?.total) return null;
+  const used = disk.total - disk.free;
+  const fill = h('div', { class: 'meter-fill' });
+  fill.style.width = `${Math.max(2, (used / disk.total) * 100).toFixed(1)}%`;
+  return h('div', { class: 'disk-info' }, h('div', { class: 'meter' }, fill), h('div', { class: 'meter-row' }, h('span', { text: `${fmtSize(disk.free)} libres` }), h('span', { text: `de ${fmtSize(disk.total)}` })));
+}
+
+async function useStorage(mode, label) {
+  if (!(await openDialog({
+    title: `¿Guardar los archivos en ${label}?`,
+    message: 'A partir de ahora, lo que subas y veas en Archivos estará en ese disco. Los archivos del almacenamiento anterior no se borran: puedes volver a cambiar cuando quieras.',
+    confirm: 'Cambiar almacenamiento',
+  }))) return;
+  try {
+    await api('/api/storage/mode', { method: 'POST', json: { mode } });
+    toast(`Ahora los archivos se guardan en ${label}`);
+    loadStats();
+    refresh();
+  } catch (err) { reportError(err); }
+}
+
+async function renderStorageView() {
+  clearInterval(storagePoll);
+  setHeader(heading('Almacenamiento', 'Dónde se guardan los archivos del hosting'), [], null);
+  setLoading(true);
+  try {
+    const s = await api('/api/storage');
+    if (state.view !== 'storage') return;
+    const downloadBtn = (cls = 'btn btn-primary') => (s.agentAvailable
+      ? h('a', { class: cls, href: '/api/storage/agent-download', download: 'NoirAlmacenamiento.exe', onclick: () => toast('Descargando la app (≈ 90 MB)…') }, icon('download'), h('span', { text: 'Descargar app' }))
+      : h('span', { class: 'badge muted', text: 'Ejecuta CONSTRUIR APP ALMACENAMIENTO.bat en este PC' }));
+    $('#actions').replaceChildren(downloadBtn());
+
+    const cur = s.current;
+    const remote = cur.kind === 'remote';
+    const hero = h('section', { class: 'storage-hero' },
+      h('span', { class: `storage-icon${remote ? ' remote' : ''}` }, icon(remote ? 'server' : 'folder')),
+      h('div', { class: 'storage-main' },
+        h('span', { class: 'muted small', text: 'Los archivos se guardan en' }),
+        h('strong', { text: remote ? cur.name : `Este equipo · ${cur.name}` }),
+        h('span', { class: 'mono small muted', text: cur.root || '' }),
+        remote && h('div', {}, cur.online ? h('span', { class: 'badge ok', text: cur.lan ? 'Conectado · red local' : 'Conectado · internet' }) : h('span', { class: 'badge err', text: `Desconectado · visto ${timeAgo(cur.lastSeen).toLowerCase()}` }))),
+      h('div', { class: 'storage-disk' }, diskBar(cur.disk)));
+
+    const agentCards = s.agents.map((a) => {
+      const active = s.mode === `agent:${a.id}`;
+      return h('div', { class: `agent-card${active ? ' active' : ''}` },
+        h('div', { class: 'agent-top' },
+          h('span', { class: 'ftype' }, icon('server')),
+          h('div', { class: 'name-stack' }, h('strong', { text: a.name }), h('small', { text: a.online ? `Conectado · ${a.lan ? 'red local' : 'internet'}` : `Desconectado · visto ${timeAgo(a.lastSeen).toLowerCase()}` })),
+          active ? h('span', { class: 'badge gold', text: 'En uso' }) : h('span', { class: `badge ${a.online ? 'ok' : 'muted'}`, text: a.online ? 'En línea' : 'Fuera de línea' })),
+        h('span', { class: 'mono small muted agent-root', text: a.root || '' }),
+        diskBar(a.disk),
+        h('div', { class: 'panel-actions' },
+          !active && h('button', { class: 'btn btn-sm', type: 'button', disabled: !a.online, title: a.online ? '' : 'Abre la app en ese PC primero', onclick: () => useStorage(`agent:${a.id}`, a.name) }, icon('check'), 'Usar este PC'),
+          h('button', {
+            class: 'btn btn-sm btn-ghost btn-danger', type: 'button',
+            onclick: async () => {
+              if (!(await confirmDanger(`¿Desvincular «${a.name}»?`, 'El hosting dejará de usar ese PC. Los archivos que tiene guardados no se borran de su disco.', 'Desvincular'))) return;
+              try { await api(`/api/storage/agents/${a.id}`, { method: 'DELETE' }); toast('PC desvinculado'); loadStats(); refresh(); } catch (err) { reportError(err); }
+            },
+          }, 'Desvincular')));
+    });
+    const localCard = h('div', { class: `agent-card${remote ? '' : ' active'}` },
+      h('div', { class: 'agent-top' },
+        h('span', { class: 'ftype dir' }, icon('folder')),
+        h('div', { class: 'name-stack' }, h('strong', { text: `Este equipo · ${s.local.name}` }), h('small', { text: 'Donde está el panel' })),
+        remote ? h('span', { class: 'badge', text: 'Disponible' }) : h('span', { class: 'badge gold', text: 'En uso' })),
+      h('span', { class: 'mono small muted agent-root', text: s.local.root }),
+      diskBar(s.local.disk),
+      remote && h('div', { class: 'panel-actions' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => useStorage('local', 'este equipo') }, icon('check'), 'Usar este PC')));
+
+    const m = s.migration;
+    let migrate = null;
+    if (remote) {
+      const pct = m?.total ? Math.round((m.done / m.total) * 100) : 0;
+      const bar = h('div', { class: 'meter' }, h('div', { class: 'meter-fill' }));
+      bar.firstChild.style.width = `${m?.running ? pct : m ? 100 : 0}%`;
+      migrate = card('Pasar archivos de este equipo', 'move',
+        h('p', { class: 'panel-note', text: `Copia los archivos que hay en este PC a «${cur.name}». Los originales no se borran.` }),
+        m && h('div', { class: 'disk-info' }, bar, h('div', { class: 'meter-row' },
+          h('span', { text: m.running ? `Copiando… ${m.done} de ${m.total}` : `Terminado: ${m.done - m.errors} de ${m.total} copiados${m.errors ? ` · ${m.errors} con error` : ''}` }),
+          h('span', { text: `${fmtSize(m.bytesDone)} de ${fmtSize(m.bytes)}` }))),
+        h('div', { class: 'panel-actions' }, h('button', {
+          class: 'btn', type: 'button', disabled: Boolean(m?.running) || !cur.online,
+          onclick: async () => { try { await api('/api/storage/migrate', { method: 'POST' }); toast('Copia iniciada'); refresh(); } catch (err) { reportError(err); } },
+        }, icon('copy'), m?.running ? 'Copiando…' : 'Copiar archivos ahora')));
+    }
+
+    const steps = card('Añadir un PC de almacenamiento', 'plus',
+      h('ol', { class: 'wizard' },
+        h('li', { class: 'wizard-step' }, h('span', { class: 'step-num', text: '1' }), h('div', { class: 'wizard-body' }, h('strong', { text: 'Descarga la app' }), h('p', { class: 'panel-note', text: 'Hazlo desde el otro PC entrando a este panel, o descárgala aquí y cópiala con una memoria USB. Cada descarga lleva su propio código de vinculación (válido 48 horas).' }), downloadBtn('btn'))),
+        h('li', { class: 'wizard-step' }, h('span', { class: 'step-num', text: '2' }), h('div', { class: 'wizard-body' }, h('strong', { text: 'Ábrela en el otro PC' }), h('p', { class: 'panel-note', text: 'Doble clic en NoirAlmacenamiento.exe. Si Windows muestra «Windows protegió su PC», pulsa «Más información» → «Ejecutar de todas formas». Si pregunta por el firewall, pulsa «Permitir».' }))),
+        h('li', { class: 'wizard-step' }, h('span', { class: 'step-num', text: '3' }), h('div', { class: 'wizard-body' }, h('strong', { text: 'Listo' }), h('p', { class: 'panel-note', text: 'Se vincula sola, elige el disco con más espacio y arranca con Windows. Si es el primer PC que vinculas, pasa a ser el almacenamiento del hosting automáticamente.' })))));
+
+    setContent(hero, h('div', { class: 'panels' },
+      h('div', { class: 'panels-col' }, card('Discos disponibles', 'server', h('div', { class: 'agent-list' }, localCard, agentCards)), migrate),
+      h('div', { class: 'panels-col' }, steps)));
+    storagePoll = setInterval(() => { if (state.view === 'storage' && !$('#dialog').open) refresh(); else if (state.view !== 'storage') clearInterval(storagePoll); }, m?.running ? 2500 : 15000);
+  } catch (err) {
+    reportError(err);
+  } finally {
+    setLoading(false);
+  }
+}
+
 // Registro de vistas
 Object.assign(VIEWS, {
   code: { render: renderCodeView, min: 'editor' },
   db: { render: renderDbView, min: 'editor' },
   invites: { render: renderInvitesView, min: 'admin' },
+  storage: { render: renderStorageView, min: 'admin' },
 });

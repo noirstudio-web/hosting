@@ -41,6 +41,12 @@ function Publish-Link([string]$Url, [bool]$Online) {
   } finally { $ErrorActionPreference = $prevEAP }
 }
 
+# App para el PC de almacenamiento (se construye una sola vez)
+if (-not (Test-Path -LiteralPath (Join-Path $Root 'bin\NoirAlmacenamiento.exe'))) {
+  Say 'Preparando la app de almacenamiento (solo la primera vez, ~1 minuto)...' 'DarkGray'
+  & node scripts\build-agent.cjs | Out-Null
+}
+
 # 2. Tunel seguro (Cloudflare) para acceder desde otro computador por internet
 $tunnel = $null
 $publicUrl = $null
