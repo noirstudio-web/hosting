@@ -398,28 +398,85 @@ async function showSearch(id, q, inContent) {
 const DB_TYPE = { sqlite: ['SQLite', 'database'], sql: ['Volcado SQL', 'code'], csv: ['CSV', 'table'], json: ['JSON', 'code'], other: ['Archivo', 'file'] };
 const dbUi = { tab: {}, table: {}, offset: 0, query: {} };
 
+const DB_EXT = /\.(db|sqlite|sqlite3|db3|sql|csv|tsv|json|dump|bak)$/i;
+const DB_ACCEPT = '.db,.sqlite,.sqlite3,.db3,.sql,.csv,.tsv,.json,.dump,.bak';
+
+// Nueva versión de una base concreta (un solo archivo, se guarda con el nombre de esa base).
 function pickDbFile(targetName) {
-  const input = h('input', { type: 'file', accept: targetName ? null : '.db,.sqlite,.sqlite3,.db3,.sql,.csv,.tsv,.json,.dump,.bak' });
+  const input = h('input', { type: 'file' });
   input.addEventListener('change', () => {
     const file = input.files[0];
     if (!file) return;
-    if (targetName && file.name !== targetName) toast(`Se guardará como nueva versión de “${targetName}”`);
-    enqueue([{ file, rel: '', name: targetName || file.name }], { area: 'db' });
+    if (file.name !== targetName) toast(`Se guardará como nueva versión de “${targetName}”`);
+    enqueue([{ file, rel: '', name: targetName }], { area: 'db' });
   });
   input.click();
 }
 
+function pickDbFiles() {
+  const input = h('input', { type: 'file', multiple: true, accept: DB_ACCEPT });
+  input.addEventListener('change', () => uploadDbEntries([...input.files].map((file) => ({ file, rel: '' }))));
+  input.click();
+}
+
+// Sube varias bases a la vez (archivos sueltos o el contenido de una carpeta, incluidas subcarpetas).
+async function uploadDbEntries(entries) {
+  if (!entries?.length) return;
+  const valid = entries.filter((e) => DB_EXT.test(e.file.name));
+  const skipped = entries.length - valid.length;
+  if (!valid.length) return toast('No hay archivos de base de datos (.db, .sqlite, .sql, .csv, .json…) en lo que elegiste', 'error');
+  // Si dos archivos se llaman igual en subcarpetas distintas, se distinguen con el nombre de su carpeta.
+  const counts = {};
+  for (const e of valid) counts[e.file.name.toLowerCase()] = (counts[e.file.name.toLowerCase()] || 0) + 1;
+  const list = valid.map((e) => {
+    const parent = e.rel.split('/').filter(Boolean).pop();
+    const name = counts[e.file.name.toLowerCase()] > 1 && parent ? `${parent}_${e.file.name}` : e.file.name;
+    return { file: e.file, rel: '', name: name.replace(/[\\/:*?"<>|]/g, '_') };
+  });
+  if (list.length > 1 || skipped) {
+    const size = list.reduce((s, e) => s + e.file.size, 0);
+    const ok = await openDialog({
+      title: `¿Subir ${plural(list.length, 'base de datos', 'bases de datos')}?`,
+      message: `${list.map((e) => e.name).slice(0, 6).join(', ')}${list.length > 6 ? '…' : ''} · ${fmtSize(size)}${skipped ? ` · ${plural(skipped, 'archivo omitido', 'archivos omitidos')} (no son bases de datos)` : ''}. Si alguna ya existe, la anterior se guarda en su historial.`,
+      confirm: 'Subir',
+    });
+    if (!ok) return;
+  }
+  enqueue(list, { area: 'db' });
+}
+
+// Soltar archivos o carpetas en la lista de bases de datos (lo llama app.js).
+function dbDrop(entries) {
+  uploadDbEntries(entries);
+}
+
+function dbUploadButton(cls = 'btn btn-primary') {
+  return h('button', {
+    class: cls, type: 'button', 'aria-haspopup': 'menu',
+    onclick: (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      showMenu(r.right - 220, r.bottom + 6, [
+        { icon: 'file', label: 'Subir archivos', action: pickDbFiles },
+        { icon: 'folder', label: 'Subir carpeta', action: async () => uploadDbEntries(await pickFolder()) },
+      ], r.top);
+    },
+  }, icon('upload'), h('span', { text: 'Subir' }), icon('chevron', 'caret-down'));
+}
+
 async function renderDbView() {
   if (state.sub) return renderDbDetail(state.sub);
-  setHeader(heading('Bases de datos', 'SQLite, volcados SQL, CSV y JSON con historial de versiones'), [
-    h('button', { class: 'btn btn-primary', type: 'button', onclick: () => pickDbFile() }, icon('upload'), h('span', { text: 'Subir base de datos' })),
-  ], null);
+  setHeader(heading('Bases de datos', 'SQLite, volcados SQL, CSV y JSON con historial de versiones'), [dbUploadButton()], null);
   setLoading(true);
   try {
     const { items, sqlite } = await api('/api/databases');
     if (state.view !== 'db' || state.sub) return;
     const note = !sqlite && h('p', { class: 'panel-note', text: 'Aviso: esta versión de Node.js no incluye SQLite; las bases .db se guardan pero no se pueden explorar.' });
-    if (!items.length) return setContent(note, emptyState('database', 'No hay bases de datos', 'Sube un archivo .db / .sqlite, un volcado .sql, un CSV o un JSON. Si subes otro con el mismo nombre, la versión anterior se guarda en el historial.', h('button', { class: 'btn btn-primary', type: 'button', onclick: () => pickDbFile() }, icon('upload'), 'Subir base de datos')));
+    if (!items.length) {
+      return setContent(note, emptyState('database', 'No hay bases de datos', 'Sube archivos .db / .sqlite, volcados .sql, CSV o JSON, o una carpeta entera (o arrástrala aquí). Si subes otro con el mismo nombre, la versión anterior se guarda en el historial.',
+        h('div', { class: 'empty-actions' },
+          h('button', { class: 'btn btn-primary', type: 'button', onclick: pickDbFiles }, icon('file'), 'Subir archivos'),
+          h('button', { class: 'btn', type: 'button', onclick: async () => uploadDbEntries(await pickFolder()) }, icon('folder'), 'Subir carpeta'))));
+    }
     const rows = items.map((d) => h('tr', { onclick: () => { location.hash = `#/db/${encodeURIComponent(d.name)}`; } },
       h('td', {}, h('div', { class: 'name-cell' }, h('span', { class: `ftype db-${d.type}` }, icon(DB_TYPE[d.type][1])), h('div', { class: 'name-stack' }, h('span', { class: 'name', text: d.name }), h('small', { text: DB_TYPE[d.type][0] })))),
       h('td', { class: 'col-size', text: fmtSize(d.size) }),

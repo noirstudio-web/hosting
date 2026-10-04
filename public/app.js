@@ -1754,12 +1754,12 @@ window.addEventListener('drop', async (e) => {
   dragDepth = 0;
   $('#dropzone').hidden = true;
   if (!canDrop()) return;
-  if (state.view === 'db') return enqueue([...e.dataTransfer.files].map((file) => ({ file, rel: '' })), { area: 'db' });
   const entries = [...e.dataTransfer.items].filter((i) => i.kind === 'file').map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
   const fallback = [...e.dataTransfer.files];
   try {
     const collected = entries.length ? await collectEntries(entries) : fallback.map((file) => ({ file, rel: '' }));
     if (state.view === 'code') return codeDrop(collected);
+    if (state.view === 'db') return dbDrop(collected);
     enqueue(collected);
   } catch (err) { reportError(err); }
 });
