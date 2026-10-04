@@ -450,22 +450,12 @@ function dbDrop(entries) {
   uploadDbEntries(entries);
 }
 
-function dbUploadButton(cls = 'btn btn-primary') {
-  return h('button', {
-    class: cls, type: 'button', 'aria-haspopup': 'menu',
-    onclick: (e) => {
-      const r = e.currentTarget.getBoundingClientRect();
-      showMenu(r.right - 220, r.bottom + 6, [
-        { icon: 'file', label: 'Subir archivos', action: pickDbFiles },
-        { icon: 'folder', label: 'Subir carpeta', action: async () => uploadDbEntries(await pickFolder()) },
-      ], r.top);
-    },
-  }, icon('upload'), h('span', { text: 'Subir' }), icon('chevron', 'caret-down'));
-}
+const dbFolderBtn = (cls = 'btn btn-primary') => h('button', { class: cls, type: 'button', onclick: async () => uploadDbEntries(await pickFolder()) }, icon('upload'), h('span', { text: 'Subir carpeta' }));
+const dbFilesBtn = (cls = 'btn') => h('button', { class: cls, type: 'button', onclick: pickDbFiles }, icon('file'), h('span', { text: 'Subir archivos' }));
 
 async function renderDbView() {
   if (state.sub) return renderDbDetail(state.sub);
-  setHeader(heading('Bases de datos', 'SQLite, volcados SQL, CSV y JSON con historial de versiones'), [dbUploadButton()], null);
+  setHeader(heading('Bases de datos', 'SQLite, volcados SQL, CSV y JSON con historial de versiones'), [dbFilesBtn(), dbFolderBtn()], null);
   setLoading(true);
   try {
     const { items, sqlite } = await api('/api/databases');
@@ -473,9 +463,7 @@ async function renderDbView() {
     const note = !sqlite && h('p', { class: 'panel-note', text: 'Aviso: esta versión de Node.js no incluye SQLite; las bases .db se guardan pero no se pueden explorar.' });
     if (!items.length) {
       return setContent(note, emptyState('database', 'No hay bases de datos', 'Sube archivos .db / .sqlite, volcados .sql, CSV o JSON, o una carpeta entera (o arrástrala aquí). Si subes otro con el mismo nombre, la versión anterior se guarda en el historial.',
-        h('div', { class: 'empty-actions' },
-          h('button', { class: 'btn btn-primary', type: 'button', onclick: pickDbFiles }, icon('file'), 'Subir archivos'),
-          h('button', { class: 'btn', type: 'button', onclick: async () => uploadDbEntries(await pickFolder()) }, icon('folder'), 'Subir carpeta'))));
+        h('div', { class: 'empty-actions' }, dbFolderBtn(), dbFilesBtn())));
     }
     const rows = items.map((d) => h('tr', { onclick: () => { location.hash = `#/db/${encodeURIComponent(d.name)}`; } },
       h('td', {}, h('div', { class: 'name-cell' }, h('span', { class: `ftype db-${d.type}` }, icon(DB_TYPE[d.type][1])), h('div', { class: 'name-stack' }, h('span', { class: 'name', text: d.name }), h('small', { text: DB_TYPE[d.type][0] })))),
