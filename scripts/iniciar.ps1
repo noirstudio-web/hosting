@@ -11,7 +11,26 @@ function Say([string]$Text, [string]$Color = 'Gray') { Write-Host "  $Text" -For
 function Fail([string]$Text) { Write-Host ''; Say $Text 'Red'; Write-Host ''; Read-Host '  Pulsa Enter para salir' | Out-Null; exit 1 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  Fail 'Node.js no esta instalado. Descargalo en https://nodejs.org (version LTS) y vuelve a abrir INICIAR.'
+  # Node.js es necesario: se instala solo la primera vez (Windows puede pedir permiso de administrador).
+  Say 'Node.js no esta instalado en este PC. Instalandolo (solo la primera vez, 1-3 minutos)...' 'Yellow'
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    & winget install --id OpenJS.NodeJS.LTS -e --silent --accept-package-agreements --accept-source-agreements | Out-Host
+  } else {
+    try {
+      $msi = Join-Path $env:TEMP 'node-lts-x64.msi'
+      $ProgressPreference = 'SilentlyContinue'
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      $index = Invoke-RestMethod 'https://nodejs.org/dist/index.json'
+      $lts = ($index | Where-Object { $_.lts } | Select-Object -First 1).version
+      Invoke-WebRequest -UseBasicParsing "https://nodejs.org/dist/$lts/node-$lts-x64.msi" -OutFile $msi
+      Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn" -Verb RunAs -Wait
+    } catch { Say "No se pudo descargar Node.js: $($_.Exception.Message)" 'Red' }
+  }
+  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Fail 'No se pudo instalar Node.js automaticamente. Instalalo desde https://nodejs.org (boton LTS) y vuelve a abrir INICIAR.bat.'
+  }
+  Say "Node.js instalado ($(node -v))." 'Green'
 }
 
 # 1. Configuracion (los usuarios se crean desde el navegador en el primer inicio)
