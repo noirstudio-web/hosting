@@ -1733,14 +1733,14 @@ $('#folderInput').addEventListener('change', (e) => {
 // Arrastrar y soltar archivos desde el equipo (incluye carpetas)
 let dragDepth = 0;
 const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
-const canDrop = () => state.me && can('editor') && (state.view === 'files' || (state.view === 'db' && !state.sub) || (state.view === 'code' && !state.sub && can('admin')));
+const canDrop = () => state.me && can('editor') && (state.view === 'files' || (state.view === 'db' && !state.sub) || state.view === 'code');
 
 window.addEventListener('dragenter', (e) => {
   if (!hasFiles(e) || !canDrop()) return;
   e.preventDefault();
   dragDepth++;
   if (state.view === 'db') $('#dropTarget').textContent = 'en Bases de datos';
-  if (state.view === 'code') $('#dropTarget').textContent = 'como nuevo proyecto de Código';
+  if (state.view === 'code') $('#dropTarget').textContent = state.sub ? 'para actualizar este proyecto' : 'como nuevo proyecto';
   $('#dropzone').hidden = false;
 });
 window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });

@@ -182,10 +182,18 @@ async function uploadProjectFolder(entries, existing = null) {
   }, 1000);
 }
 
-// Soltar una carpeta en la lista de proyectos (lo llama app.js).
+// Soltar una carpeta en Código (lo llama app.js): en la lista crea un proyecto; dentro de uno propio lo actualiza.
 function codeDrop(entries) {
-  if (!can('admin')) return toast('Solo un administrador puede subir proyectos', 'error');
-  uploadProjectFolder(entries);
+  const id = state.sub ? state.sub.split('/')[0] : null;
+  if (!id) return uploadProjectFolder(entries);
+  const p = codeCache[id]?.info?.project;
+  if (!p || p.kind !== 'upload') return toast('Este proyecto no se puede actualizar arrastrando', 'error');
+  if (!p.canManage) return toast(`Solo ${p.createdBy} o un administrador pueden actualizar este proyecto`, 'error');
+  uploadProjectFolder(entries, p);
+}
+
+function codeDropZone(title, text) {
+  return h('div', { class: 'code-drop' }, h('span', { class: 'code-drop-icon' }, icon('upload')), h('strong', { text: title }), h('span', { text }));
 }
 
 function projectDialog() {
@@ -211,26 +219,22 @@ async function renderCodeView() {
   return renderProject(id, rest.join('/'));
 }
 
-const uploadProjectBtn = (cls = 'btn btn-primary') => h('button', { class: cls, type: 'button', onclick: async () => uploadProjectFolder(await pickFolder()) }, icon('upload'), h('span', { text: 'Subir carpeta' }));
 const pathProjectBtn = () => h('button', { class: 'btn', type: 'button', onclick: projectDialog, title: 'Mostrar una carpeta que ya está en el PC servidor' }, icon('folder'), h('span', { text: 'Carpeta del servidor' }));
 
 async function renderProjectList() {
-  setHeader(heading('Código', 'Tus proyectos de desarrollo'), can('admin') ? [pathProjectBtn(), uploadProjectBtn()] : [], null);
+  setHeader(heading('Código', 'Proyectos del equipo'), can('admin') ? [pathProjectBtn()] : [], null);
   setLoading(true);
   try {
     const { items } = await api('/api/projects');
     if (state.view !== 'code') return;
-    if (!items.length) {
-      return setContent(emptyState('code', 'No hay proyectos', can('admin') ? 'Sube la carpeta de un proyecto (o arrástrala aquí) para ver su código desde cualquier lugar. No se suben node_modules, .git ni archivos de claves.' : 'Un administrador puede subir proyectos.',
-        can('admin') && h('div', { class: 'empty-actions' }, uploadProjectBtn(), pathProjectBtn())));
-    }
-    setContent(h('div', { class: 'project-grid' }, items.map((p) => h('a', { class: `project-card${p.exists ? '' : ' missing'}`, href: `#/code/${p.id}` },
+    const zone = codeDropZone('Arrastra aquí la carpeta de tu proyecto', 'Se sube al hosting sin node_modules, .git ni archivos de claves. Para actualizarlo después, arrastra la carpeta dentro del proyecto.');
+    if (!items.length) return setContent(zone);
+    setContent(zone, h('div', { class: 'project-grid' }, items.map((p) => h('a', { class: `project-card${p.exists ? '' : ' missing'}`, href: `#/code/${p.id}` },
       h('div', { class: 'project-top' }, h('span', { class: 'ftype code' }, icon('code')),
         p.kind === 'upload' ? h('span', { class: 'badge', title: 'Subido al hosting' }, icon('upload'), 'Subido') : p.branch && h('span', { class: 'badge' }, icon('branch'), p.branch)),
       h('strong', { text: p.name }),
-      h('span', { class: 'project-path', text: p.kind === 'upload' ? `Actualizado ${timeAgo(p.updatedAt || p.createdAt).toLowerCase()}` : p.path, title: p.path || '' }),
-      !p.exists && h('span', { class: 'badge muted', text: p.kind === 'upload' ? 'Sin archivos' : 'Carpeta no encontrada' })))),
-      can('admin') && h('p', { class: 'panel-note drop-hint', text: 'Consejo: arrastra una carpeta a esta página para subirla como proyecto.' }));
+      h('span', { class: 'project-path', text: p.kind === 'upload' ? `${p.createdBy} · ${timeAgo(p.updatedAt || p.createdAt).toLowerCase()}` : p.path, title: p.path || '' }),
+      !p.exists && h('span', { class: 'badge muted', text: p.kind === 'upload' ? 'Sin archivos' : 'Carpeta no encontrada' })))));
   } catch (err) {
     reportError(err);
   } finally {
@@ -270,9 +274,8 @@ async function renderProject(id, filePath) {
       ...parts.flatMap((s, i) => [icon('chevron', 'crumb-sep'), h('a', { class: `crumb${i === parts.length - 1 ? ' current' : ''}`, href: `#/code/${id}/${segHash(parts.slice(0, i + 1).join('/'))}`, text: s })]));
     setHeader(crumbs, [
       h('label', { class: 'search' }, icon('search'), searchInput, h('label', { class: 'search-opt', title: 'Buscar también dentro de los archivos' }, inContent, h('span', { text: 'contenido' }))),
-      can('admin') && p.kind === 'upload' && h('button', { class: 'btn', type: 'button', title: 'Vuelve a subir la carpeta para reemplazar los archivos', onclick: async () => uploadProjectFolder(await pickFolder(), p) }, icon('refresh'), h('span', { text: 'Actualizar carpeta' })),
       h('a', { class: 'btn', href: `/api/projects/${id}/zip`, download: '', title: 'Descargar el proyecto en ZIP' }, icon('download'), h('span', { text: 'ZIP' })),
-      can('admin') && h('button', {
+      p.canManage && h('button', {
         class: 'icon-btn', type: 'button', title: p.kind === 'upload' ? 'Eliminar proyecto' : 'Quitar proyecto de la lista',
         onclick: async () => {
           const msg = p.kind === 'upload' ? 'Se borrarán sus archivos del hosting. Tu carpeta original no se toca.' : 'Solo se quita de la lista. La carpeta y sus archivos no se tocan.';
@@ -333,6 +336,8 @@ function showOverview(info, viewer, id) {
   const maxCount = top[0]?.[1] || 1;
   const readme = codeCache[id].children.get('')?.find((i) => /^readme(\.md|\.txt)?$/i.test(i.name));
   const body = h('div', { class: 'overview' },
+    project.kind === 'upload' && project.canManage && h('div', { class: 'code-drop small' }, h('span', { class: 'code-drop-icon' }, icon('refresh')),
+      h('strong', { text: 'Para actualizar este proyecto, arrastra aquí su carpeta' }), h('span', { text: 'Se reemplazan sus archivos por los de la carpeta nueva.' })),
     h('div', { class: 'stat-row' },
       h('div', { class: 'stat' }, h('strong', { text: stats.files.toLocaleString('es') + (stats.truncated ? '+' : '') }), h('span', { text: 'archivos' })),
       h('div', { class: 'stat' }, h('strong', { text: fmtSize(stats.size) }), h('span', { text: 'tamaño' })),

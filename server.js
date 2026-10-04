@@ -1119,7 +1119,7 @@ function uploadTarget(url, user) {
   if (!name || (area === 'db' && name.startsWith('.'))) throw new HttpError(400, 'Nombre de archivo no válido');
   if (!Number.isSafeInteger(size) || size < 0) throw new HttpError(400, 'Tamaño no válido');
   if (area === 'project') {
-    if (user.role !== 'admin') throw new HttpError(403, 'Solo un administrador puede subir proyectos');
+    if (!ctx.projectCanUpload(url.searchParams.get('project'), user)) throw new HttpError(403, 'Solo quien subió el proyecto o un administrador puede cambiarlo');
     if (ctx.projectRejects(joinRel(dirRel, name))) throw new HttpError(400, 'Archivo omitido: dependencias o claves no se suben');
   }
   const s = area === 'db' ? ctx.localStore : area === 'project' ? ctx.projectStore(url.searchParams.get('project')) : store();
