@@ -33,7 +33,7 @@
     if (!screen) {
       screen = document.createElement('section');
       screen.className = 'login';
-      screen.innerHTML = '<div class="login-card"><div class="brand-mark lg">N</div><h1 class="login-title">Noir Studio</h1>'
+      screen.innerHTML = '<div class="login-card"><img class="login-logo" src="img/logo.png" alt="Noir Studio" width="960" height="280">'
         + '<p class="login-sub">Servidor privado de archivos</p><p class="connect-status"></p><p class="field-hint connect-hint"></p></div>';
       document.body.append(screen);
     }

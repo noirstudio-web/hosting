@@ -143,7 +143,7 @@ for (const [k, list] of Object.entries(KIND_EXT)) for (const e of list) KIND_OF[
 
 const STATIC_MIME = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+  '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json',
 };
 
 const extOf = (name) => path.extname(name).slice(1).toLowerCase();
