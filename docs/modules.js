@@ -660,6 +660,33 @@ async function renderStorageView() {
     if (s.mode === 'cloud') {
       $('#actions').replaceChildren();
       const cur = s.current;
+      const pct = cur.disk?.total ? Math.round(((cur.disk.total - cur.disk.free) / cur.disk.total) * 100) : 0;
+      const gb = h('input', { type: 'number', min: '1', max: '100000', step: '1', required: true, value: String(s.quotaGB) });
+      const save = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('check'), 'Guardar capacidad');
+      const form = h('form', { class: 'dform' },
+        field('Capacidad (GB)', gb, 'Lo que el hosting deja usar en total: archivos, Código, bases de datos y papelera.'),
+        h('div', { class: 'panel-actions' }, save));
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        save.disabled = true;
+        try {
+          const r = await api('/api/storage/quota', { method: 'POST', json: { gb: Number(gb.value) } });
+          toast(`Capacidad: ${r.quotaGB} GB`);
+          loadStats();
+          refresh();
+        } catch (err) { reportError(err); } finally { save.disabled = false; }
+      });
+      const expand = card('Ampliar almacenamiento', 'plus',
+        pct >= 80 && h('p', { class: 'form-error', text: `Ya se usa el ${pct}% del espacio. Amplíalo para que se puedan seguir subiendo archivos.` }),
+        h('ol', { class: 'wizard' },
+          h('li', { class: 'wizard-step' }, h('span', { class: 'step-num', text: '1' }), h('div', { class: 'wizard-body' },
+            h('strong', { text: 'Más de 5 GB: activa el plan Launch de Neon' }),
+            h('p', { class: 'panel-note', text: 'El plan gratis incluye 5 GB. Con Launch el espacio no tiene límite: se paga lo que se usa (unos 0,023 US$ por GB al mes; 100 GB ≈ 2,30 US$) e incluye 500 GB de descargas al mes.' }),
+            h('div', { class: 'panel-actions' }, h('a', { class: 'btn', href: 'https://console.neon.tech/app/billing', target: '_blank', rel: 'noopener' }, icon('globe'), 'Abrir facturación de Neon')))),
+          h('li', { class: 'wizard-step' }, h('span', { class: 'step-num', text: '2' }), h('div', { class: 'wizard-body' },
+            h('strong', { text: 'Pon aquí la nueva capacidad' }),
+            h('p', { class: 'panel-note', text: 'El hosting avisa y deja de aceptar subidas al llegar a este límite, así nunca gastas más de lo previsto.' }),
+            form))));
       return setContent(h('section', { class: 'storage-hero' },
         h('span', { class: 'storage-icon remote' }, icon('server')),
         h('div', { class: 'storage-main' },
@@ -667,7 +694,8 @@ async function renderStorageView() {
           h('strong', { text: cur.name }),
           h('span', { class: 'mono small muted', text: cur.root }),
           h('div', {}, h('span', { class: 'badge ok', text: 'En línea · no depende de ningún PC' }))),
-        h('div', { class: 'storage-disk' }, diskBar(cur.disk))));
+        h('div', { class: 'storage-disk' }, diskBar(cur.disk))),
+      h('div', { class: 'panels' }, h('div', { class: 'panels-col' }, expand)));
     }
     const downloadBtn = (cls = 'btn btn-primary') => (s.agentAvailable
       ? h('a', { class: cls, href: link('/api/storage/agent-download'), download: 'NoirAlmacenamiento.exe', onclick: () => toast('Descargando la app (≈ 90 MB)…') }, icon('download'), h('span', { text: 'Descargar app' }))

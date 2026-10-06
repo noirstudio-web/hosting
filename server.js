@@ -1210,6 +1210,7 @@ if (CLOUD) {
         await cloud.uploads.remove(t.id);
       }
     }
+    await ctx.checkSpace(t.size); // ¿cabe en el almacenamiento contratado?
     // Nombre definitivo: en Archivos no se sobrescribe nada (se añade « (1)»); en proyectos y bases de datos sí.
     let name = t.name;
     if (t.area === 'files') {
@@ -1254,6 +1255,7 @@ if (CLOUD) {
       await s3.put(u.key, Buffer.alloc(0), contentTypeOf(t.name));
     }
     await cloud.uploads.remove(t.id);
+    ctx.store().invalidate?.();
     const finalName = unescKey(u.key.split('/').pop());
     if (t.area === 'db') {
       activity(user, 'db_upload', `${t.name} (${fmtBytes(t.size)})`, ip);
