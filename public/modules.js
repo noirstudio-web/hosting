@@ -751,6 +751,7 @@ async function renderStorageView() {
 
 async function serverCard() {
   let u;
+  if (state.cloud) return null; // en la nube no hay servidor que actualizar a mano
   try { u = await api('/api/update'); } catch { return null; }
   if (!u.supervised) {
     const exeUrl = `https://github.com/${u.repo}/releases/latest/download/NoirStudioServidor.exe`;
