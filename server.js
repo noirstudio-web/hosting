@@ -15,8 +15,10 @@ let sea = null;
 try { sea = require('node:sea'); } catch { /* Node sin soporte SEA */ }
 const IS_SEA = Boolean(sea?.isSea?.()); // empaquetado como NoirStudioServidor.exe
 const VERSION = require('./lib/version');
-// En el servidor instalado, los datos viven en NOIR_HOME (p. ej. D:\NoirStudio).
-const ROOT = process.env.NOIR_HOME ? path.resolve(process.env.NOIR_HOME) : __dirname;
+// Modo nube (Neon): estado en Postgres y archivos en Object Storage (ver lib/cloud.js).
+const CLOUD = process.env.NOIR_CLOUD === '1';
+// En el servidor instalado, los datos viven en NOIR_HOME (p. ej. D:\NoirStudio). En la nube, solo hay /tmp.
+const ROOT = CLOUD ? path.join(os.tmpdir(), 'noir') : process.env.NOIR_HOME ? path.resolve(process.env.NOIR_HOME) : __dirname;
 const CONFIG_PATH = path.join(ROOT, 'config.json');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
@@ -47,7 +49,10 @@ const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/;
 
 // ───────────────────────── Configuración y base de datos ─────────────────────────
 
+let cloudConfig = {}; // en la nube, los ajustes se guardan junto al estado (db.config)
+
 function loadConfig() {
+  if (CLOUD) return { ...DEFAULTS, ...cloudConfig };
   try {
     return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) };
   } catch {
@@ -56,6 +61,11 @@ function loadConfig() {
 }
 
 function saveConfig(cfg) {
+  if (CLOUD) {
+    cloudConfig = { ...cfg };
+    db.config = cloudConfig;
+    return saveDb();
+  }
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n');
 }
 
@@ -69,6 +79,7 @@ function loadDb() {
 }
 
 function writeDbNow() {
+  if (CLOUD) return cloud.markDirty();
   clearTimeout(saveTimer);
   saveTimer = null;
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -79,6 +90,7 @@ function writeDbNow() {
 
 let saveTimer = null;
 function saveDb() {
+  if (CLOUD) return cloud.markDirty();
   if (!saveTimer) saveTimer = setTimeout(writeDbNow, 250);
 }
 
@@ -260,6 +272,7 @@ function log(...args) {
 
 // ───────────────────────── Estado ─────────────────────────
 
+const cloud = CLOUD ? require('./lib/cloud').createCloud({ log: (...a) => log(...a) }) : null;
 let config = loadConfig();
 const STORAGE = path.resolve(ROOT, config.storage);
 const db = loadDb();
@@ -279,9 +292,10 @@ function resolveIn(base, rel) {
 
 
 const relOf = (full) => path.relative(STORAGE, full).split(path.sep).join('/');
-const invalidateUsage = () => { usageCache.at = 0; };
+const invalidateUsage = () => { usageCache.at = 0; ctx.store().invalidate?.(); };
 
 function activity(user, action, detail = '', ip = '') {
+  if (CLOUD) return cloud.activity.add({ t: Date.now(), user: user?.username || null, action, detail, ip });
   db.activity.push({ t: Date.now(), user: user?.username || null, action, detail, ip });
   if (db.activity.length > MAX_ACTIVITY) db.activity.splice(0, db.activity.length - MAX_ACTIVITY);
   saveDb();
@@ -310,7 +324,8 @@ async function failLimit(ip) {
 const publicUser = (u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.createdAt, lastLogin: u.lastLogin || null });
 const findUser = (username) => db.users.find((u) => u.username.toLowerCase() === String(username || '').trim().toLowerCase());
 
-function createSession(user) {
+async function createSession(user) {
+  if (CLOUD) return cloud.sessions.create(user.id, config.sessionHours);
   const token = crypto.randomBytes(32).toString('base64url');
   sessions.set(token, { userId: user.id, exp: Date.now() + config.sessionHours * 3600 * 1000 });
   return token;
@@ -324,8 +339,12 @@ function sessionToken(req) {
   try { return new URL(req.url, 'http://x').searchParams.get('access_token') || null; } catch { return null; }
 }
 
-function getUser(req) {
+async function getUser(req) {
   const token = sessionToken(req);
+  if (CLOUD) {
+    const userId = token && token.length <= 128 ? await cloud.sessions.get(token, config.sessionHours) : null;
+    return (userId && db.users.find((u) => u.id === userId)) || null;
+  }
   const s = token && sessions.get(token);
   if (!s || s.exp < Date.now()) {
     if (token) sessions.delete(token);
@@ -340,7 +359,8 @@ function getUser(req) {
   return user;
 }
 
-function dropSessions(userId, exceptToken) {
+async function dropSessions(userId, exceptToken) {
+  if (CLOUD) return cloud.sessions.dropUser(userId, exceptToken);
   for (const [t, s] of sessions) if (s.userId === userId && t !== exceptToken) sessions.delete(t);
 }
 
@@ -365,6 +385,10 @@ setInterval(() => {
 // Los archivos del hosting pasan siempre por store(): disco de este PC u otro PC (ver lib/storage.js).
 
 const store = () => ctx.store();
+const s3 = CLOUD ? require('./lib/s3').S3.fromEnv(process.env.NOIR_BUCKET || 'noir') : null;
+const { unescKey } = require('./lib/s3store');
+// Tipo con el que se guarda cada archivo en la nube (los de texto, siempre como texto plano: nunca se ejecutan).
+const contentTypeOf = (name) => (TEXT_EXT.has(extOf(name)) ? 'text/plain; charset=utf-8' : MIME[extOf(name)] || 'application/octet-stream');
 const cleanRel = (rel) => String(rel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
 const joinRel = (...parts) => parts.map(cleanRel).filter(Boolean).join('/');
 const baseName = (rel) => rel.split('/').pop();
@@ -464,10 +488,16 @@ async function serveFile(req, res, full, opts) {
 
 // Archivo del almacenamiento del hosting.
 async function serveStoreFile(req, res, rel, opts) {
-  const s = store();
+  const s = opts?.store || store();
   const st = await s.stat(rel);
   if (!st) throw new HttpError(404, 'Archivo no encontrado');
   if (st.type !== 'file') throw new HttpError(400, 'No es un archivo');
+  // En la nube, las vistas previas (imagen, audio, vídeo…) se leen directamente del almacenamiento
+  // con un enlace firmado; las descargas pasan por aquí para llevar el nombre del archivo.
+  if (s.signedUrl && !opts?.download && req.method === 'GET') {
+    res.writeHead(302, { Location: s.signedUrl(rel, 3600), 'Cache-Control': 'no-store' });
+    return res.end();
+  }
   await sendRanged(req, res, { name: baseName(rel), size: st.size, mtime: st.mtime, open: (a, b) => s.openRead(rel, a, b) }, opts);
 }
 
@@ -584,9 +614,10 @@ async function streamZip(res, entries, zipName) {
 // ───────────────────────── Rutas ─────────────────────────
 
 const routes = [];
-function route(method, pattern, role, handler) {
+// opts.lock: false → en la nube no bloquea el estado (rutas que no lo modifican, p. ej. subidas por partes).
+function route(method, pattern, role, handler, opts = {}) {
   const re = new RegExp(`^${pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`);
-  routes.push({ method, re, role, handler });
+  routes.push({ method, re, role, handler, lock: opts.lock !== false });
 }
 
 async function handleApi(req, res, url) {
@@ -596,14 +627,35 @@ async function handleApi(req, res, url) {
     if (r.method !== req.method && !(r.method === 'GET' && req.method === 'HEAD')) continue;
     const m = r.re.exec(url.pathname);
     if (!m) continue;
-    const user = getUser(req);
-    if (r.role) {
-      if (!user) throw new HttpError(401, 'No autenticado');
-      if (ROLES[user.role] < ROLES[r.role]) throw new HttpError(403, 'No tienes permiso para esta acción');
-    }
     const params = {};
     for (const [k, v] of Object.entries(m.groups || {})) params[k] = decodeURIComponent(v);
-    return r.handler({ req, res, url, params, user, ip: clientIp(req) });
+    const run = async () => {
+      const user = await getUser(req);
+      if (r.role) {
+        if (!user) throw new HttpError(401, 'No autenticado');
+        if (ROLES[user.role] < ROLES[r.role]) throw new HttpError(403, 'No tienes permiso para esta acción');
+      }
+      return r.handler({ req, res, url, params, user, ip: clientIp(req) });
+    };
+    if (!CLOUD) return run();
+    if (!mutating || !r.lock) {
+      await cloud.refresh();
+      return run();
+    }
+    // Cambios en la nube: la respuesta sale solo cuando el cambio quedó guardado.
+    const end = res.end;
+    let pending = null;
+    res.end = (...args) => { pending = args; return res; };
+    try {
+      await cloud.tx(run);
+    } catch (err) {
+      res.end = end;
+      if (pending && !res.writableEnded) { res.destroy(); return; }
+      throw err;
+    }
+    res.end = end;
+    if (pending) res.end(...pending);
+    return;
   }
   throw new HttpError(404, 'Recurso no encontrado');
 }
@@ -620,6 +672,7 @@ route('GET', '/api/session', null, ({ req, res, user }) => {
     setupRequired: db.users.length === 0,
     setupNeedsCode: db.users.length === 0 && !isLocalRequest(req),
     version: VERSION,
+    cloud: CLOUD,
   }, { 'Access-Control-Allow-Origin': '*' });
 });
 
@@ -629,7 +682,8 @@ route('POST', '/api/setup', null, async ({ req, res, ip }) => {
   const { code, username, password } = await readJson(req);
   if (!isLocalRequest(req)) {
     const given = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (!setupCode || given !== setupCode.replace('-', '')) {
+    const expected = CLOUD ? db.setupCode : setupCode;
+    if (!expected || given !== expected.replace('-', '')) {
       const n = await failLimit(ip);
       log(`\x1b[31m●\x1b[0m Código de configuración incorrecto desde ${ip} (${n}/${LIMIT_MAX_FAILS})`);
       throw new HttpError(403, 'Código de configuración incorrecto. Míralo en la ventana del servidor.');
@@ -641,11 +695,12 @@ route('POST', '/api/setup', null, async ({ req, res, ip }) => {
   const user = { id: crypto.randomUUID(), username: name, hash: hashPassword(password), role: 'admin', createdAt: Date.now(), lastLogin: Date.now() };
   db.users.push(user);
   setupCode = null;
+  delete db.setupCode;
   fs.rmSync(path.join(DATA_DIR, 'codigo-configuracion.txt'), { force: true });
   activity(user, 'setup', 'Cuenta de administrador creada', ip);
   writeDbNow();
   log(`\x1b[32m✓\x1b[0m Hosting configurado. Administrador: ${user.username}`);
-  { const token = createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
+  { const token = await createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
 });
 
 route('POST', '/api/login', null, async ({ req, res, ip }) => {
@@ -663,11 +718,12 @@ route('POST', '/api/login', null, async ({ req, res, ip }) => {
   user.lastLogin = Date.now();
   activity(user, 'login', '', ip);
   log(`\x1b[32m●\x1b[0m ${user.username} inició sesión desde ${ip}`);
-  { const token = createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
+  { const token = await createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
 });
 
-route('POST', '/api/logout', null, ({ req, res, user, ip }) => {
-  sessions.delete(sessionToken(req));
+route('POST', '/api/logout', null, async ({ req, res, user, ip }) => {
+  if (CLOUD) await cloud.sessions.remove(sessionToken(req));
+  else sessions.delete(sessionToken(req));
   if (user) activity(user, 'logout', '', ip);
   sendJson(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '', 0) });
 });
@@ -730,7 +786,7 @@ route('POST', '/api/register', null, async ({ req, res, ip }) => {
   activity(user, 'register', `Con el código ${invite.code} (${ROLE_ES[user.role]})`, ip);
   writeDbNow();
   log(`\x1b[32m✓\x1b[0m Nueva cuenta: ${name} (${ROLE_ES[user.role]}) con el código ${invite.code}`);
-  { const token = createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
+  { const token = await createSession(user); sendJson(res, 200, { ok: true, user: publicUser(user), token }, { 'Set-Cookie': sessionCookie(req, token, config.sessionHours * 3600) }); }
 });
 
 route('POST', '/api/account/password', 'viewer', async ({ req, res, user, ip }) => {
@@ -738,7 +794,7 @@ route('POST', '/api/account/password', 'viewer', async ({ req, res, user, ip }) 
   if (!verifyPassword(String(current || ''), user.hash)) throw new HttpError(400, 'La contraseña actual no es correcta');
   validatePassword(next);
   user.hash = hashPassword(next);
-  dropSessions(user.id, sessionToken(req));
+  await dropSessions(user.id, sessionToken(req));
   activity(user, 'password_change', 'Cambió su contraseña', ip);
   sendJson(res, 200, { ok: true });
 });
@@ -890,6 +946,7 @@ route('POST', '/api/trash/restore', 'editor', async ({ req, res, user, ip }) => 
 });
 
 async function purgeTrash(ids) {
+  if (CLOUD && !cloud.inTx) return cloud.tx(() => purgeTrash(ids));
   for (const id of ids) {
     const item = db.trash.find((t) => t.id === id);
     if (!item) continue;
@@ -1001,8 +1058,9 @@ route('GET', '/api/public/share/:token/file', null, async ({ req, res, url, para
   if (s.passwordHash && url.searchParams.get('key') !== shareKey(s)) throw new HttpError(401, 'Este enlace está protegido con contraseña');
   const download = url.searchParams.get('dl') === '1';
   if (download && !req.headers.range) {
-    s.downloads++;
-    saveDb();
+    const count = () => { const cur = db.shares.find((x) => x.token === s.token); if (cur) cur.downloads++; saveDb(); };
+    if (CLOUD) await cloud.tx(async () => count());
+    else count();
     activity({ username: `enlace · ${s.createdBy}` }, 'share_download', s.path, ip);
     log(`↓ Descarga por enlace compartido: ${s.path}`);
   }
@@ -1047,19 +1105,19 @@ route('PATCH', '/api/users/:id', 'admin', async ({ req, res, params, user, ip })
   if (password !== undefined) {
     validatePassword(password);
     target.hash = hashPassword(password);
-    dropSessions(target.id, target.id === user.id ? sessionToken(req) : null);
+    await dropSessions(target.id, target.id === user.id ? sessionToken(req) : null);
     activity(user, 'user_update', `Nueva contraseña para ${target.username}`, ip);
   }
   saveDb();
   sendJson(res, 200, { ok: true, user: publicUser(target) });
 });
 
-route('DELETE', '/api/users/:id', 'admin', ({ res, params, user, ip }) => {
+route('DELETE', '/api/users/:id', 'admin', async ({ res, params, user, ip }) => {
   const target = db.users.find((u) => u.id === params.id);
   if (!target) throw new HttpError(404, 'El usuario no existe');
   if (target.id === user.id) throw new HttpError(400, 'No puedes eliminar tu propia cuenta');
   db.users = db.users.filter((u) => u !== target);
-  dropSessions(target.id);
+  await dropSessions(target.id);
   saveDb();
   activity(user, 'user_delete', target.username, ip);
   sendJson(res, 200, { ok: true });
@@ -1067,8 +1125,8 @@ route('DELETE', '/api/users/:id', 'admin', ({ res, params, user, ip }) => {
 
 // ── Actividad y ajustes
 
-route('GET', '/api/activity', 'admin', ({ res }) => {
-  sendJson(res, 200, { items: db.activity.slice(-400).reverse() });
+route('GET', '/api/activity', 'admin', async ({ res }) => {
+  sendJson(res, 200, { items: CLOUD ? await cloud.activity.list(400) : db.activity.slice(-400).reverse() });
 });
 
 route('GET', '/api/settings', 'viewer', ({ res }) => {
@@ -1078,10 +1136,10 @@ route('GET', '/api/settings', 'viewer', ({ res }) => {
     trashDays: config.trashDays,
     publicUrl: publicBase(),
     fixedUrl: process.env.NOIR_FIXED_URL || null,
-    lanUrls: lanAddresses().map((ip) => `http://${ip}:${config.port}`),
-    storagePath: store().kind === 'local' ? STORAGE : `${store().agent.name}: ${store().agent.root}`,
+    lanUrls: CLOUD ? [] : lanAddresses().map((ip) => `http://${ip}:${config.port}`),
+    storagePath: CLOUD ? 'Nube · Neon Object Storage' : store().kind === 'local' ? STORAGE : `${store().agent.name}: ${store().agent.root}`,
     storageKind: store().kind,
-    host: os.hostname(),
+    host: CLOUD ? 'Nube (Neon · aws-us-east-1)' : os.hostname(),
     version: VERSION,
     node: process.version,
     uptime: process.uptime(),
@@ -1126,19 +1184,105 @@ function uploadTarget(url, user) {
     if (!ctx.projectCanUpload(url.searchParams.get('project'), user)) throw new HttpError(403, 'Solo quien subió el proyecto o un administrador puede cambiarlo');
     if (ctx.projectRejects(joinRel(dirRel, name))) throw new HttpError(400, 'Archivo omitido: dependencias o claves no se suben');
   }
-  const s = area === 'db' ? ctx.localStore : area === 'project' ? ctx.projectStore(url.searchParams.get('project')) : store();
+  const s = area === 'db' ? (CLOUD ? ctx.dbStore : ctx.localStore) : area === 'project' ? ctx.projectStore(url.searchParams.get('project')) : store();
   const id = crypto.createHash('sha256').update(`${area}\0${s.key}\0${dirRel}\0${name}\0${size}`).digest('hex').slice(0, 40);
   return { area, dirRel, name, size, id, s };
 }
 
-route('GET', '/api/upload/status', 'editor', async ({ res, url, user }) => {
+// En la nube, el navegador sube cada parte directamente al almacenamiento (enlace firmado por el servidor).
+if (CLOUD) {
+  const PART = 16 * 1024 * 1024;
+  const partUrl = (u, n) => s3.presign('PUT', u.key, { expires: 3600, query: { partNumber: String(n), uploadId: u.uploadId } });
+  const keyIn = (t, name) => (t.area === 'db' ? t.s.keyOf(name) : t.s.keyOf(joinRel(t.dirRel, name)));
+
+  // Busca (o crea) la subida en curso y calcula cuánto ya está en la nube.
+  const openUpload = async (t) => {
+    let u = await cloud.uploads.get(t.id);
+    if (u) {
+      if (!u.uploadId) return { u, offset: 0 };
+      try {
+        const parts = await s3.listParts(u.key, u.uploadId);
+        let offset = 0;
+        for (let n = 1; n <= parts.length && parts[n - 1].n === n && (parts[n - 1].size === PART || offset + parts[n - 1].size === t.size); n++) offset += parts[n - 1].size;
+        return { u, offset };
+      } catch (err) {
+        if (err.s3Status !== 404) throw err;
+        await cloud.uploads.remove(t.id);
+      }
+    }
+    // Nombre definitivo: en Archivos no se sobrescribe nada (se añade « (1)»); en proyectos y bases de datos sí.
+    let name = t.name;
+    if (t.area === 'files') {
+      const pending = new Set((await cloud.uploads.keysLike(t.s.dirKey(t.dirRel))).map((k) => k.slice(t.s.dirKey(t.dirRel).length)).filter((k) => !k.includes('/')).map(unescKey));
+      name = await t.s.unique(t.dirRel, t.name, pending);
+    }
+    const key = keyIn(t, name);
+    const uploadId = t.size > 0 ? await s3.createMultipart(key, contentTypeOf(name)) : null;
+    u = { key, uploadId, size: t.size };
+    await cloud.uploads.put(t.id, u);
+    return { u, offset: 0 };
+  };
+
+  route('GET', '/api/upload/status', 'editor', async ({ res, url, user }) => {
+    const t = uploadTarget(url, user);
+    const { u, offset } = await openUpload(t);
+    const next = offset < t.size ? partUrl(u, offset / PART + 1) : null;
+    sendJson(res, 200, { offset, direct: { chunk: PART, url: next } });
+  }, { lock: false });
+
+  route('POST', '/api/upload/sign', 'editor', async ({ res, url, user }) => {
+    const t = uploadTarget(url, user);
+    const u = await cloud.uploads.get(t.id);
+    if (!u?.uploadId) throw new HttpError(409, 'La subida no existe: vuelve a intentarlo');
+    const offset = Number(url.searchParams.get('offset'));
+    if (!Number.isSafeInteger(offset) || offset % PART || offset >= t.size) throw new HttpError(400, 'Parte no válida');
+    sendJson(res, 200, { url: partUrl(u, offset / PART + 1) });
+  }, { lock: false });
+
+  route('POST', '/api/upload/complete', 'editor', async ({ res, url, user, ip }) => {
+    const t = uploadTarget(url, user);
+    const u = await cloud.uploads.get(t.id);
+    if (!u) throw new HttpError(409, 'La subida no existe: vuelve a intentarlo');
+    if (u.uploadId) {
+      const parts = await s3.listParts(u.key, u.uploadId);
+      const total = parts.reduce((sum, p) => sum + p.size, 0);
+      if (total !== t.size) throw new HttpError(409, 'Faltan partes por subir', { offset: 0 });
+      if (t.area === 'db') await ctx.archiveDbVersion(t.name);
+      await s3.completeMultipart(u.key, u.uploadId, parts);
+    } else {
+      if (t.area === 'db') await ctx.archiveDbVersion(t.name);
+      await s3.put(u.key, Buffer.alloc(0), contentTypeOf(t.name));
+    }
+    await cloud.uploads.remove(t.id);
+    const finalName = unescKey(u.key.split('/').pop());
+    if (t.area === 'db') {
+      activity(user, 'db_upload', `${t.name} (${fmtBytes(t.size)})`, ip);
+      return sendJson(res, 200, { offset: t.size, done: true, name: t.name });
+    }
+    if (t.area === 'project') return sendJson(res, 200, { offset: t.size, done: true, name: finalName });
+    const rel = joinRel(t.dirRel, finalName);
+    invalidateUsage();
+    activity(user, 'upload', `${rel} (${fmtBytes(t.size)})`, ip);
+    sendJson(res, 200, { offset: t.size, done: true, name: finalName });
+  }, { lock: false });
+
+  route('DELETE', '/api/upload', 'editor', async ({ res, url, user }) => {
+    const t = uploadTarget(url, user);
+    const u = await cloud.uploads.get(t.id);
+    if (u?.uploadId) await s3.abortMultipart(u.key, u.uploadId).catch(() => {});
+    await cloud.uploads.remove(t.id);
+    sendJson(res, 200, { ok: true });
+  }, { lock: false });
+}
+
+if (!CLOUD) route('GET', '/api/upload/status', 'editor', async ({ res, url, user }) => {
   const t = uploadTarget(url, user);
   if (t.area !== 'db') await t.s.mkdir(t.dirRel);
   const offset = uploadLocks.has(t.id) ? await t.s.partSize(t.id) : await t.s.resetPart(t.id, t.size);
   sendJson(res, 200, { offset });
 });
 
-route('PUT', '/api/upload', 'editor', async ({ req, res, url, user, ip }) => {
+if (!CLOUD) route('PUT', '/api/upload', 'editor', async ({ req, res, url, user, ip }) => {
   const t = uploadTarget(url, user);
   const offset = Number(url.searchParams.get('offset'));
   const maxChunk = config.maxChunkMB * 1024 * 1024;
@@ -1174,7 +1318,7 @@ route('PUT', '/api/upload', 'editor', async ({ req, res, url, user, ip }) => {
   }
 });
 
-route('DELETE', '/api/upload', 'editor', async ({ res, url, user }) => {
+if (!CLOUD) route('DELETE', '/api/upload', 'editor', async ({ res, url, user }) => {
   const t = uploadTarget(url, user);
   if (!uploadLocks.has(t.id)) await t.s.cancelPart(t.id);
   sendJson(res, 200, { ok: true });
@@ -1183,14 +1327,14 @@ route('DELETE', '/api/upload', 'editor', async ({ res, url, user }) => {
 // ───────────────────────── Módulos: código y bases de datos ─────────────────────────
 
 const ctx = {
-  ROOT, DATA_DIR, STORAGE, IS_SEA, VERSION, CONFIG_PATH,
+  ROOT, DATA_DIR, STORAGE, IS_SEA, VERSION, CONFIG_PATH, CLOUD, cloud, s3, contentTypeOf,
   publicBase: () => publicBase(),
   lanUrls: () => lanAddresses().map((ip) => `http://${ip}:${config.port}`),
   invalidateUsage: () => invalidateUsage(),
   DB_DIR: path.join(ROOT, 'databases'),
   BIN_DIR: path.join(ROOT, 'bin'),
   db, route, HttpError, sendJson, readJson, activity, saveDb, writeDbNow, log,
-  serveFile, streamZip, validName, movePath, fmtBytes, resolveIn,
+  serveFile, serveStoreFile, streamZip, validName, movePath, fmtBytes, resolveIn,
   getConfig: () => config,
   updateConfig(patch) {
     const cfg = { ...loadConfig(), ...patch };
@@ -1203,8 +1347,11 @@ const ctx = {
 require('./lib/storage')(ctx);
 require('./lib/projects')(ctx);
 require('./lib/databases')(ctx);
-require('./lib/updates')(ctx);
-require('./lib/migrate')(ctx);
+if (!CLOUD) {
+  // En la nube no hay .exe que actualizar ni datos que mudar.
+  require('./lib/updates')(ctx);
+  require('./lib/migrate')(ctx);
+}
 
 const publicBase = () => process.env.NOIR_PUBLIC_URL || null;
 
@@ -1233,6 +1380,11 @@ const APP_CSP = [
 ].join('; ');
 
 async function serveStatic(req, res, pathname) {
+  // En la nube solo está la API: la web se abre desde GitHub Pages.
+  if (CLOUD) {
+    res.writeHead(302, { Location: `${PAGES_ORIGIN}/hosting/` });
+    return res.end();
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'Método no permitido');
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { throw new HttpError(400, 'Ruta inválida'); }
@@ -1448,4 +1600,39 @@ async function main() {
   server.listen(config.port, config.host, banner);
 }
 
-main();
+// ── Nube (Neon): lo arranca cloud/function.mjs y le pasa las peticiones por 127.0.0.1.
+async function cloudMain() {
+  await cloud.init(db, { users: [], shares: [], trash: [], activity: [], invites: [], projects: [] });
+  cloudConfig = { ...(db.config || {}) };
+  config = loadConfig();
+  if (!db.secret || (!db.users.length && !db.setupCode)) {
+    await cloud.tx(async () => {
+      if (!db.secret) db.secret = crypto.randomBytes(32).toString('hex');
+      if (!db.users.length && !db.setupCode) db.setupCode = newSetupCode();
+      saveDb();
+    });
+  }
+  if (!db.users.length) log(`Primer inicio: código de configuración ${db.setupCode}`);
+
+  // Mantenimiento: papelera antigua, actividad y subidas abandonadas.
+  const maintain = async () => {
+    const limit = Date.now() - config.trashDays * 86400 * 1000;
+    const old = db.trash.filter((t) => t.deletedAt < limit).map((t) => t.id);
+    if (old.length) await purgeTrash(old);
+    await cloud.activity.prune(5000);
+    for (const u of await cloud.uploads.stale(Date.now() - 7 * 86400 * 1000)) {
+      if (u.uploadId) await s3.abortMultipart(u.key, u.uploadId).catch(() => {});
+      await cloud.uploads.remove(u.id);
+    }
+  };
+  maintain().catch((err) => log('Mantenimiento:', err.message));
+  setInterval(() => maintain().catch((err) => log('Mantenimiento:', err.message)), 3600 * 1000).unref();
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+  });
+}
+
+if (CLOUD) module.exports = { start: cloudMain, server };
+else main();

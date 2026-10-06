@@ -1,0 +1,14 @@
+{
+  "name": "noir-studio-hosting",
+  "private": true,
+  "description": "Noir Studio Hosting: web en GitHub Pages, servidor y archivos en la nube (Neon).",
+  "scripts": {
+    "deploy": "neon deploy --env .env.local"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@neon/config": "latest"
+  }
+}

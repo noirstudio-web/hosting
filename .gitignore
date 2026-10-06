@@ -8,3 +8,11 @@ data/
 databases/
 agent/dist/
 dist/
+
+# Nube (Neon): credenciales locales
+.neon
+.env
+.env.*
+node_modules/
+cloud/.neon
+cloud/.env*

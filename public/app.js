@@ -2,7 +2,7 @@
 /* Noir Studio · Hosting — cliente */
 
 const CHUNK = 32 * 1024 * 1024; // por debajo del límite de 100 MB del túnel
-const PARALLEL = 2;
+const PARALLEL = 4;
 const MAX_RETRIES = 4;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -375,7 +375,7 @@ async function showAuth() {
   $('#auth').hidden = false;
   let s = null;
   try { s = await api('/api/session', { allow401: true }); } catch { /* sin conexión */ }
-  if (s) setStudio(s.studio);
+  if (s) { setStudio(s.studio); state.cloud = Boolean(s.cloud); }
   $('#setupCodeField').hidden = !s?.setupNeedsCode;
   $('#setupCode').required = Boolean(s?.setupNeedsCode);
   // Enlace de invitación: #/invite/CODIGO
@@ -1401,7 +1401,10 @@ async function renderSettingsView() {
         h('button', { class: 'btn', type: 'button', onclick: changePassword }, icon('key'), 'Cambiar contraseña'),
         h('button', { class: 'btn btn-ghost', type: 'button', onclick: logout }, icon('logout'), 'Cerrar sesión')));
 
-    const connection = card('Conexión', 'globe',
+    const connection = s.storageKind === 'cloud' ? card('Conexión', 'globe',
+      kv('Dirección', urlValue(window.NOIR_PAGES || location.href)),
+      kv('Servidor', s.host),
+      h('p', { class: 'panel-note', text: 'Todo está en la nube: la web, los archivos y las cuentas funcionan sin ningún PC encendido.' })) : card('Conexión', 'globe',
       s.publicUrl ? kv('Desde internet', urlValue(s.publicUrl)) : kv('Desde internet', h('span', { class: 'muted', text: 'Túnel no activo (modo red local)' })),
       s.fixedUrl && kv('Enlace fijo', urlValue(s.fixedUrl)),
       ...s.lanUrls.map((u) => kv('Red local', urlValue(u))),
@@ -1590,9 +1593,11 @@ async function runUpload(t) {
   updateUploadItem(t);
   let retries = 0;
   try {
-    let { offset } = await api(`/api/upload/status?${qs}`);
+    const st = await api(`/api/upload/status?${qs}`);
+    let { offset } = st;
     t.startBytes = offset;
     t.loaded = offset;
+    if (st.direct) return await runDirectUpload(t, qs, st);
     for (;;) {
       if (t.cancelled) throw new Error('cancelled');
       try {
@@ -1612,15 +1617,66 @@ async function runUpload(t) {
     t.status = 'done';
     t.loaded = t.size;
   } catch (err) {
-    if (t.cancelled) {
-      t.status = 'cancelled';
-      api(`/api/upload?${qs}`, { method: 'DELETE' }).catch(() => {});
-    } else {
-      t.status = 'error';
-      t.error = err.message;
-    }
+    uploadFailed(t, qs, err);
   }
   updateUploadItem(t);
+}
+
+function uploadFailed(t, qs, err) {
+  if (t.cancelled) {
+    t.status = 'cancelled';
+    api(`/api/upload?${qs}`, { method: 'DELETE' }).catch(() => {});
+  } else {
+    t.status = 'error';
+    t.error = err.message;
+  }
+}
+
+// Nube: cada parte va directamente del navegador al almacenamiento con un enlace firmado por el servidor.
+async function runDirectUpload(t, qs, st) {
+  const chunk = st.direct.chunk;
+  let offset = st.offset;
+  let url = st.direct.url;
+  let retries = 0;
+  try {
+    while (offset < t.size) {
+      if (t.cancelled) throw new Error('cancelled');
+      try {
+        if (!url) ({ url } = await api(`/api/upload/sign?${qs}&offset=${offset}`, { method: 'POST' }));
+        await putPart(t, url, offset, t.file.slice(offset, Math.min(offset + chunk, t.size)));
+        offset = Math.min(offset + chunk, t.size);
+        url = null;
+        retries = 0;
+      } catch (err) {
+        if (t.cancelled || err.fatal || ++retries > MAX_RETRIES) throw err;
+        t.retrying = retries;
+        updateUploadItem(t);
+        await sleep(1500 * retries);
+        ({ offset, direct: { url } } = await api(`/api/upload/status?${qs}`));
+        t.retrying = 0;
+      }
+    }
+    const r = await api(`/api/upload/complete?${qs}`, { method: 'POST' });
+    t.finalName = r.name;
+    t.status = 'done';
+    t.loaded = t.size;
+  } catch (err) {
+    uploadFailed(t, qs, err);
+  }
+  updateUploadItem(t);
+}
+
+function putPart(t, url, offset, blob) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    t.xhr = xhr;
+    xhr.open('PUT', url);
+    xhr.upload.onprogress = (e) => { t.loaded = offset + e.loaded; updateUploadItem(t); };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(xhr.status === 403 ? 'Enlace de subida caducado' : `Error ${xhr.status} del almacenamiento`)));
+    xhr.onerror = () => reject(new Error('Conexión interrumpida'));
+    xhr.onabort = () => reject(new Error('cancelled'));
+    xhr.send(blob);
+  });
 }
 
 function sendChunk(t, qs, offset, blob) {
@@ -1838,6 +1894,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const s = await api('/api/session', { allow401: true });
     setStudio(s.studio);
+    state.cloud = Boolean(s.cloud);
     if (s.authenticated) enterApp(s.user);
     else showAuth();
   } catch {

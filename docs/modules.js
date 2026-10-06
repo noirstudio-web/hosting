@@ -222,7 +222,7 @@ async function renderCodeView() {
 const pathProjectBtn = () => h('button', { class: 'btn', type: 'button', onclick: projectDialog, title: 'Mostrar una carpeta que ya está en el PC servidor' }, icon('folder'), h('span', { text: 'Carpeta del servidor' }));
 
 async function renderProjectList() {
-  setHeader(heading('Código', 'Proyectos del equipo'), can('admin') ? [pathProjectBtn()] : [], null);
+  setHeader(heading('Código', 'Proyectos del equipo'), can('admin') && !state.cloud ? [pathProjectBtn()] : [], null);
   setLoading(true);
   try {
     const { items } = await api('/api/projects');
@@ -657,6 +657,18 @@ async function renderStorageView() {
   try {
     const s = await api('/api/storage');
     if (state.view !== 'storage') return;
+    if (s.mode === 'cloud') {
+      $('#actions').replaceChildren();
+      const cur = s.current;
+      return setContent(h('section', { class: 'storage-hero' },
+        h('span', { class: 'storage-icon remote' }, icon('server')),
+        h('div', { class: 'storage-main' },
+          h('span', { class: 'muted small', text: 'Los archivos se guardan en' }),
+          h('strong', { text: cur.name }),
+          h('span', { class: 'mono small muted', text: cur.root }),
+          h('div', {}, h('span', { class: 'badge ok', text: 'En línea · no depende de ningún PC' }))),
+        h('div', { class: 'storage-disk' }, diskBar(cur.disk))));
+    }
     const downloadBtn = (cls = 'btn btn-primary') => (s.agentAvailable
       ? h('a', { class: cls, href: link('/api/storage/agent-download'), download: 'NoirAlmacenamiento.exe', onclick: () => toast('Descargando la app (≈ 90 MB)…') }, icon('download'), h('span', { text: 'Descargar app' }))
       : h('span', { class: 'badge muted', text: 'App de almacenamiento no disponible en este servidor' }));

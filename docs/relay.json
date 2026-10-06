@@ -1,9 +1,0 @@
-{
-  "topic": "noirstudio-679ae8a4ddba5437134ece1c",
-  "publicKey": {
-    "kty": "EC",
-    "x": "rh_6B5RgyT_BEXM3h3FdRsniR9tIA8oBBlzt45bD4Ng",
-    "y": "Zhvm2pCVUCbBlCn75RM30yrSmm1qvLIkHdBL3qfiqK4",
-    "crv": "P-256"
-  }
-}

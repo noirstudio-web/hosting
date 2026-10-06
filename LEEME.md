@@ -1,47 +1,28 @@
 # Noir Studio · Hosting privado
 
-Servidor de archivos privado para acceder a este computador desde cualquier otro, por internet, con usuarios, contraseñas y conexión HTTPS.
+Servidor de archivos privado con usuarios, contraseñas, Código y Bases de datos. **Todo está en la nube**: no hace falta
+tener ningún PC encendido.
 
-## Puesta en marcha
+## Cómo entrar
 
-1. Doble clic en **`INICIAR.bat`**.
-2. La ventana muestra la dirección pública (por ejemplo `https://palabras-al-azar.trycloudflare.com`), que **se copia sola al portapapeles**.
-3. Ábrela en el navegador. **La primera vez** verás la pantalla *Primer inicio*: crea tu **usuario y contraseña de administrador**.
-   - Si lo haces desde **otro computador**, te pedirá el **código de configuración** que aparece en la ventana del servidor. Así nadie más puede adueñarse del hosting.
-4. A partir de ahí, entra con tu usuario y contraseña.
+Abre **https://noirstudio-web.github.io/hosting/** desde cualquier equipo o celular y entra con tu usuario y contraseña.
 
-> Deja la ventana abierta mientras uses el hosting. Al cerrarla, el acceso se corta. Si el servidor falla, se reinicia solo.
->
-> ¿Perdiste el código de configuración? Está en `data/codigo-configuracion.txt` hasta que se crea la primera cuenta.
+- **La web** se carga desde GitHub Pages (este repositorio, carpeta `docs/`).
+- **El servidor, los archivos y las cuentas** están en la nube de **Neon** (región aws-us-east-1):
+  - Archivos, proyectos de Código y bases de datos → *Neon Object Storage* (bucket `noir`).
+  - Usuarios, enlaces, papelera, ajustes y actividad → *Postgres* de Neon.
+  - Servidor → *Neon Functions* (`cloud/function.mjs` arranca `server.js` en modo nube).
+- Las subidas van **directamente del navegador a la nube**, por partes de 16 MB que se reanudan si se corta la conexión.
 
-## Servidor en otro PC (recomendado)
+> El plan gratuito de Neon incluye 5 GB de archivos y 5 GB de descargas al mes. Si se queda corto, sube a un plan de pago
+> en la consola de Neon (proyecto **noir-studio**).
 
-El **otro PC** es el servidor, encendido siempre; **este PC** queda para desarrollar y publicar actualizaciones.
+## Publicar una actualización (desde este PC)
 
-**Instalar (una sola vez), en el otro PC:**
-1. Entra al panel → **Ajustes → Mudanza al PC servidor** y descarga los dos archivos:
-   **NoirStudioServidor.exe** y el **paquete de mudanza** (`noir-respaldo-….zip`, con tus usuarios, archivos y ajustes).
-2. Abre **NoirStudioServidor.exe** y acepta el permiso de administrador
-   (si sale *«Windows protegió su PC»*: **Más información → Ejecutar de todas formas**).
-3. Listo: importa tus datos, arranca **al encender el equipo aunque nadie inicie sesión**, evita la suspensión y el
-   enlace fijo **https://noirstudio-web.github.io/hosting/** pasa a llevar a él.
+Doble clic en **`PUBLICAR ACTUALIZACION.bat`**: despliega el servidor en la nube (`neon deploy`) y publica la web en
+GitHub. Requiere este PC vinculado al proyecto de Neon (`.neon` y `.env.local`, que nunca se suben a GitHub).
 
-**Publicar una actualización (desde este PC):** doble clic en **`PUBLICAR ACTUALIZACION.bat`**. Se sube a GitHub y el
-servidor se actualiza solo (o al momento desde *Ajustes → Servidor y actualizaciones*).
-
-Datos del servidor: `<disco>:\NoirStudio\` · registro: `data\logs\servidor.log`.
-
-## Guardar los archivos en otro PC (opcional)
-
-El panel se queda en este PC y **otro PC presta su disco** como almacenamiento del hosting:
-
-1. En el panel ve a **Almacenamiento → Descargar app** (puedes hacerlo desde el otro PC entrando al panel, o copiar el archivo con una USB).
-2. En el otro PC, doble clic en **NoirAlmacenamiento.exe**.
-   - Si Windows muestra *«Windows protegió su PC»*: **Más información → Ejecutar de todas formas**.
-   - Si pregunta por el firewall: **Permitir**.
-3. Listo: se vincula sola, elige el disco con más espacio, arranca con Windows y, si es el primer PC que vinculas, pasa a ser el almacenamiento.
-
-Funciona aunque los dos PCs estén en redes distintas (usa un túnel seguro); en la misma red usa la conexión local, más rápida. **Ambos PCs deben estar encendidos.** En **Almacenamiento** puedes ver si está conectado, su espacio libre, cambiar entre discos y copiar los archivos de este PC al otro.
+Para pasar datos de un servidor local a la nube: `node scripts/nube-importar.cjs`.
 
 ## Qué incluye
 
@@ -50,8 +31,8 @@ Funciona aunque los dos PCs estén en redes distintas (usa un túnel seguro); en
 | **Archivos** | Botón **Subir** → *Subir archivos* o *Subir carpeta* (o arrastrar), crear carpetas, renombrar, mover, copiar, descargar (carpetas como ZIP), vista previa de imágenes, video, audio, PDF y texto. Clic derecho para el menú de opciones. Arrastra archivos sobre una carpeta para moverlos. |
 | **Búsqueda** | Escribe en el buscador para filtrar la carpeta; pulsa **Enter** para buscar en todas las carpetas. |
 | **Compartidos** | Enlaces públicos de descarga para quien no tiene cuenta, con caducidad, contraseña y límite de descargas opcionales. |
-| **Papelera** | Lo eliminado va aquí y se puede restaurar. Se vacía sola tras 30 días (configurable). |
-| **Código** | Explorador de los proyectos que estás desarrollando: árbol de carpetas, resaltado de sintaxis, búsqueda por nombre o contenido, últimos commits de Git y descarga en ZIP. Solo lectura; `.env`, claves y `node_modules` se ocultan siempre. El administrador añade proyectos con la ruta de su carpeta. |
+| **Papelera** | Lo eliminado va aquí y se puede restaurar. Se vacía sola tras los días configurados. |
+| **Código** | Explorador de los proyectos que estás desarrollando: árbol de carpetas, resaltado de sintaxis, búsqueda por nombre o contenido, últimos commits de Git y descarga en ZIP. Solo lectura; `.env`, claves y `node_modules` se ocultan siempre. Para subir un proyecto, arrastra su carpeta (sin `node_modules` ni claves). |
 | **Bases de datos** | Sube bases SQLite (.db, .sqlite), volcados .sql, CSV o JSON. Explora tablas, ejecuta consultas SQL de solo lectura y conserva las 10 versiones anteriores con opción de restaurar. |
 | **Usuarios** *(admin)* | Crear cuentas con rol **Administrador**, **Editor** (sube, organiza, comparte) o **Lector** (solo ve y descarga). |
 | **Códigos de acceso** *(admin)* | Genera códigos de invitación (rol, caducidad y número de usos). La persona pulsa “¿Tienes un código de acceso?” en la pantalla de inicio, o abre el enlace de invitación, y crea su propia cuenta. |
@@ -64,32 +45,25 @@ Atajos: `/` buscar · `Supr` papelera · `F2` renombrar · `Ctrl+A` seleccionar 
 
 | Archivo | Para qué sirve |
 |---|---|
-| `INICIAR.bat` | Arranca el servidor y el enlace por internet |
-| `INICIAR (solo red local).bat` | Solo para equipos conectados al mismo WiFi/router |
-| `RESTABLECER CONTRASENA.bat` | Si olvidas una contraseña: la cambia desde este equipo |
-| `PUBLICAR ACTUALIZACION.bat` | Publica una nueva versión: el PC servidor se actualiza solo |
-| `CONSTRUIR APP ALMACENAMIENTO.bat` | Vuelve a generar la app del PC de almacenamiento (se hace sola la primera vez) |
-| `ACTIVAR INICIO AUTOMATICO.bat` | El hosting arranca solo cada vez que inicias sesión en Windows (activado) |
-| `QUITAR INICIO AUTOMATICO.bat` | Desactiva el arranque automático |
-| `storage/` | Aquí se guardan tus archivos |
-| `databases/` | Bases de datos subidas y su historial de versiones |
-| `data/` | Usuarios, enlaces, códigos, papelera y actividad |
-| `lib/` | Módulos del servidor (almacenamiento, código y bases de datos) |
-| `agent/` | Código de la app NoirAlmacenamiento |
-| `app/` | Instalador y supervisor del servidor (NoirStudioServidor.exe) |
-| `config.json` | Ajustes técnicos |
+| `PUBLICAR ACTUALIZACION.bat` | Publica una nueva versión (servidor en la nube + web) |
+| `server.js` | Servidor (el mismo en la nube y en un PC) |
+| `cloud/function.mjs` | Arranque del servidor en Neon Functions |
+| `neon.ts` | Infraestructura en la nube: bucket de archivos y función del servidor |
+| `lib/` | Módulos del servidor (nube, almacenamiento, código y bases de datos) |
+| `public/` → `docs/` | La web (`docs/` es la copia que publica GitHub Pages) |
+| `scripts/nube-importar.cjs` | Pasa usuarios, proyectos y archivos de un servidor local a la nube |
+| `INICIAR.bat` y demás `.bat` | Modo antiguo: servidor en un PC (ya no hace falta) |
 
 ## Seguridad
 
 - Contraseñas guardadas cifradas (scrypt), nunca en texto plano.
 - Bloqueo de 15 minutos tras 8 intentos fallidos.
 - La primera cuenta desde fuera exige el código que solo se ve en este equipo.
-- Sesiones con cookie protegida (HttpOnly, SameSite, Secure).
-- Acceso por internet siempre por HTTPS (túnel de Cloudflare).
-- Ningún archivo puede leerse ni escribirse fuera de `storage/`.
+- Sesiones guardadas en la nube; cerrar sesión o cambiar la contraseña las invalida al momento.
+- Todo el tráfico va por HTTPS. Los archivos están en un bucket privado: solo se leen con enlaces firmados que caducan.
+- Los archivos de texto se entregan siempre como texto plano (nunca se ejecutan en el navegador).
 
 ## Notas
 
-- **La dirección `trycloudflare.com` cambia cada vez que inicias el hosting.** Usa siempre el enlace fijo **https://noirstudio-web.github.io/hosting/**, que te lleva a la dirección actual.
-- Requiere [Node.js](https://nodejs.org) (ya instalado en este equipo).
-- Windows puede preguntar si permites el acceso a la red la primera vez: acepta en **redes privadas**.
+- La primera visita tras un rato sin uso tarda unos segundos: el servidor en la nube «despierta».
+- La sección **Almacenamiento** muestra el espacio usado del plan de la nube.

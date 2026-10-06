@@ -1,7 +1,7 @@
 'use strict';
 /*
- * Publica una actualización: sube la versión, construye NoirStudioServidor.exe, guarda los cambios en GitHub
- * y crea una "Release". El PC servidor la detecta y se actualiza solo.
+ * Publica una actualización: sube la versión, despliega el servidor en la nube (Neon)
+ * y publica la web en GitHub Pages. No hace falta ningún PC encendido.
  * Uso: node scripts/publish.cjs "Descripción de los cambios"
  */
 const fs = require('fs');
@@ -12,12 +12,11 @@ const ROOT = path.resolve(__dirname, '..');
 const VERSION_FILE = path.join(ROOT, 'lib', 'version.js');
 const notes = (process.argv.slice(2).join(' ').trim() || 'Mejoras y correcciones');
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit', ...opts });
-const out = (cmd, args) => execFileSync(cmd, args, { cwd: ROOT }).toString().trim();
+// neon está instalado con npm (neon.cmd en Windows): necesita la consola para ejecutarse.
+const neon = (args) => execFileSync(`neon ${args}`, { cwd: ROOT, stdio: 'inherit', shell: true });
 
-try {
-  out('gh', ['auth', 'status']);
-} catch {
-  console.error('  ✗ GitHub CLI no tiene sesión iniciada. Ejecuta: gh auth login');
+if (!fs.existsSync(path.join(ROOT, '.env.local')) || !fs.existsSync(path.join(ROOT, '.neon'))) {
+  console.error('  ✗ Este PC no está vinculado a la nube. Ejecuta: neon link (y luego neon env pull)');
   process.exit(1);
 }
 
@@ -29,21 +28,17 @@ fs.writeFileSync(VERSION_FILE, src.replace(current[0], `'${next}'`));
 console.log(`\n  ■ Publicando Noir Studio ${next}\n`);
 
 try {
-  // 2. Enlace fijo firmado y ejecutable
-  sh(process.execPath, ['scripts/prepare-relay.cjs']);
+  // 2. Servidor en la nube y web
+  if (!fs.existsSync(path.join(ROOT, 'node_modules', 'pg'))) sh(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install'], { shell: process.platform === 'win32' });
+  neon('deploy --env .env.local');
   sh(process.execPath, ['scripts/build-pages.cjs']);
-  sh(process.execPath, ['scripts/build-server.cjs']);
 
-  // 3. Código a GitHub
+  // 3. Código y web a GitHub
   sh('git', ['pull', '--rebase', '--autostash', '-q']);
   sh('git', ['add', '-A']);
   sh('git', ['commit', '-q', '-m', `Versión ${next}: ${notes}`]);
   sh('git', ['push', '-q']);
-
-  // 4. Release con el ejecutable (el servidor la descarga desde aquí)
-  sh('gh', ['release', 'create', `v${next}`, path.join('dist', 'NoirStudioServidor.exe'), '--title', `Noir Studio ${next}`, '--notes', notes, '--latest']);
-  console.log(`\n  ✓ Versión ${next} publicada. El PC servidor la instalará solo en las próximas horas`);
-  console.log('    (o al momento desde el panel: Ajustes → Servidor y actualizaciones → Buscar actualizaciones).\n');
+  console.log(`\n  ✓ Versión ${next} publicada: el servidor en la nube ya la usa y la web se actualiza en 1-2 minutos.\n`);
 } catch (err) {
   fs.writeFileSync(VERSION_FILE, src);
   console.error(`\n  ✗ No se pudo publicar: ${err.message}`);
